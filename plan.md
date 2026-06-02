@@ -84,6 +84,15 @@
 
 ---
 
+## 🧩 4.5 待處理清單 (Backlog)
+
+* [ ] **ABAP editor 寫入後驗證**
+  * 現況：`set_editor_text()` 可讓 Hello World 流程完成儲存、啟用與執行，但 SAP GUI Frontend 可能在插入文字時回報例外。
+  * 風險：工具端無法可靠判斷 editor 內容是否已完整寫入，只能從後續儲存/啟用/執行結果間接推斷。
+  * 待補：新增 editor read-back / compare 機制；若 SAP GUI COM 無法讀回，至少在貼上後加入狀態列、啟用結果、執行輸出等交叉驗證。
+
+---
+
 ## ⚠️ 5. AI 開發指引 (Vibe Coding Guidelines)
 
 致協助開發的 AI Agent，請在撰寫程式碼時嚴格遵守以下原則：

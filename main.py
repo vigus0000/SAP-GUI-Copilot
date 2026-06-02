@@ -10,20 +10,32 @@ SAP GUI Copilot — CLI 入口 (Phase 2)
 - /stop        → 停止錄製
 - /recordings  → 列出所有已錄製的 SOP
 - /play [名稱]  → 顯示指定 SOP 的操作步驟
+- /study [名稱] → 以 5 秒延遲執行錄製的 SOP
 - /ask         → 切換到 Ask Mode（問答模式）
 - /auto        → 切換回 Auto Mode（自動代操）
 - /quit        → 結束程式
 """
 
 import json
+import os
 import sys
+import time
 
 from copilot_auth import CopilotAuth
 from sap_core import SAPConnection
-from sap_agent_tools import scan_sap_screen
+from sap_agent_tools import click, scan_sap_screen, select_combo, send_vkey, set_tcode, set_text
 from llm_brain import SAPAgent
 from sap_monitor import SAPMonitor
 from sap_recorder import SAPRecorder
+
+STUDY_STEP_DELAY_SECONDS = 5
+STUDY_PREFIX_TCODE_OUTSIDE_START = os.getenv(
+    "STUDY_PREFIX_TCODE_OUTSIDE_START", "true"
+).strip().lower() not in ("0", "false", "no", "off")
+STUDY_INITIAL_TCODES = {
+    value.strip().upper()
+    for value in os.getenv("STUDY_INITIAL_TCODES", "SESSION_MANAGER,S000").split(",")
+}
 
 
 # ===== 顏色常數 =====
@@ -48,7 +60,7 @@ def print_banner():
     print(f"""
 {Colors.CYAN}╔══════════════════════════════════════════════════╗
 ║                                                  ║
-║   🤖 SAP GUI Copilot  v0.2  (Phase 2)           ║
+║   🤖 SAP GUI Copilot  v0.3.0  (Phase 2)         ║
 ║   ─────────────────────────────────────────────   ║
 ║   用自然語言操作 SAP，告別繁瑣的 T-Code！        ║
 ║                                                  ║
@@ -60,6 +72,7 @@ def print_banner():
     /stop          停止錄製
     /recordings    列出所有已錄製的 SOP
     /play [名稱]    顯示指定 SOP 的操作步驟
+    /study [名稱]   以 5 秒延遲執行錄製的 SOP
     /ask           切換到 Ask Mode（問答模式）
     /auto          切換回 Auto Mode（自動代操）
     /login         重新執行 GitHub Copilot 授權
@@ -84,6 +97,11 @@ def print_screen_scan(session):
 
         elements = result.get("elements", [])
         print(f"\n  {Colors.WHITE}元件數量:{Colors.RESET} {len(elements)}")
+        editors = result.get("editors", [])
+        if editors:
+            print(f"  {Colors.WHITE}Editor:{Colors.RESET}")
+            for editor in editors:
+                print(f"    {Colors.CYAN}{editor.get('id', '')}{Colors.RESET} │ {editor.get('type', '')}")
         print(f"  {Colors.DIM}{'─' * 80}{Colors.RESET}")
 
         for elem in elements:
@@ -115,9 +133,35 @@ def print_screen_scan(session):
         for key in result:
             if key.startswith("popup_wnd"):
                 popup = result[key]
-                print(f"\n  {Colors.YELLOW}⚠ 彈出視窗: {popup.get('title', '')}{Colors.RESET}")
+                active = " active" if popup.get("active") else ""
+                print(f"\n  {Colors.YELLOW}⚠ 彈出視窗{active}: {popup.get('id', key)} │ {popup.get('title', '')}{Colors.RESET}")
+                focused = popup.get("focused_element")
+                if focused:
+                    print(f"    {Colors.DIM}focused: {focused.get('id')} │ {focused.get('text', '') or focused.get('tooltip', '')}{Colors.RESET}")
+                for message in popup.get("messages", []):
+                    print(f"    {Colors.RED}message: {message.get('text', '')}{Colors.RESET}")
+                for editor in popup.get("editors", []):
+                    print(f"    {Colors.CYAN}editor: {editor.get('id', '')} │ {editor.get('type', '')}{Colors.RESET}")
+                for field in popup.get("fields", []):
+                    mark = "*" if field.get("focused") else " "
+                    label = field.get("label") or field.get("name") or field.get("tooltip") or "(未命名欄位)"
+                    value = field.get("value", "")
+                    print(f"    {mark} field: {label} │ {field.get('type', '')} │ {value} │ {field.get('id', '')}")
+                    options = field.get("options", [])
+                    if options:
+                        preview = ", ".join(
+                            f"{item.get('key') or '?'}={item.get('text')}"
+                            for item in options[:8]
+                        )
+                        more = " ..." if len(options) > 8 else ""
+                        print(f"      {Colors.DIM}options: {preview}{more}{Colors.RESET}")
+                actions = popup.get("actions", [])
+                if actions:
+                    action_text = ", ".join(f"{item.get('action')}={item.get('id')}" for item in actions)
+                    print(f"    {Colors.DIM}actions: {action_text}{Colors.RESET}")
                 for elem in popup.get("elements", []):
-                    print(f"    {elem.get('type', ''):20s} │ {elem.get('text', '')}")
+                    label = elem.get("text") or elem.get("tooltip") or elem.get("name") or ""
+                    print(f"    {elem.get('type', ''):20s} │ {label}")
 
         print(f"  {Colors.DIM}{'─' * 80}{Colors.RESET}")
 
@@ -154,7 +198,7 @@ def print_recordings_list(recorder):
         print()
 
     print(f"  {Colors.DIM}{'─' * 70}{Colors.RESET}")
-    print(f"  {Colors.DIM}使用 /play [名稱] 檢視步驟{Colors.RESET}\n")
+    print(f"  {Colors.DIM}使用 /play [名稱] 檢視步驟，或 /study [名稱] 延遲執行 SOP{Colors.RESET}\n")
 
 
 def print_recording_steps(recorder, name):
@@ -165,6 +209,245 @@ def print_recording_steps(recorder, name):
     except FileNotFoundError:
         print(f"\n{Colors.RED}  找不到錄製: '{name}'{Colors.RESET}")
         print(f"{Colors.DIM}  使用 /recordings 查看所有錄製{Colors.RESET}\n")
+
+
+def _event_title(event):
+    """產生 /study 步驟標籤。"""
+    event_type = event.get("event_type", "")
+    details = event.get("details", {})
+
+    if event_type == "TCODE_CHANGE":
+        return f"T-Code: {details.get('from_tcode', '?')} → {details.get('to_tcode', '?')}"
+    if event_type == "SCREEN_CHANGE":
+        return f"畫面跳轉: {details.get('from_screen', '?')} → {details.get('to_screen', '?')}"
+    if event_type == "FIELD_CHANGE":
+        element_id = details.get("element_id", "?")
+        short_id = element_id.split("/")[-1] if "/" in element_id else element_id
+        return f"欄位: {short_id} = \"{details.get('to_value', '')}\""
+    if event_type in ("ACTIVE_WINDOW_CHANGE", "WINDOW_OPEN", "WINDOW_CLOSE"):
+        return f"{event_type}: {details.get('to_window') or details.get('window_id') or '?'}"
+    if event_type == "STATUS_MESSAGE":
+        return f"狀態列: [{details.get('type', '?')}] {details.get('text', '')}"
+    return event_type or "UNKNOWN"
+
+
+def _is_okcode_field(element_id):
+    return element_id.endswith("/tbar[0]/okcd") or element_id.endswith("/okcd")
+
+
+def _is_combo_field(element_id):
+    return "/cmb" in element_id or element_id.split("/")[-1].startswith("cmb")
+
+
+def _is_radio_field(element_id):
+    return "/rad" in element_id or element_id.split("/")[-1].startswith("rad")
+
+
+def _is_checkbox_field(element_id):
+    return "/chk" in element_id or element_id.split("/")[-1].startswith("chk")
+
+
+def _as_bool(value):
+    return str(value).strip().lower() in ("true", "1", "x", "yes", "y")
+
+
+def _get_current_tcode(session):
+    try:
+        info = getattr(session, "Info", None)
+        return str(getattr(info, "Transaction", "") or "").strip().upper()
+    except Exception:
+        return ""
+
+
+def _is_study_initial_screen(session):
+    current_tcode = _get_current_tcode(session)
+    return current_tcode in STUDY_INITIAL_TCODES
+
+
+def _study_tcode_command(session, tcode):
+    tcode = str(tcode or "").strip()
+    if not tcode:
+        return tcode, False, _get_current_tcode(session)
+
+    current_tcode = _get_current_tcode(session)
+    if (
+        not STUDY_PREFIX_TCODE_OUTSIDE_START
+        or tcode.startswith("/")
+        or current_tcode in STUDY_INITIAL_TCODES
+    ):
+        return tcode, False, current_tcode
+
+    return f"/n{tcode}", True, current_tcode
+
+
+def _next_event_tcode(next_event):
+    if not next_event or next_event.get("event_type") != "TCODE_CHANGE":
+        return ""
+    return str(next_event.get("details", {}).get("to_tcode", "")).strip()
+
+
+def _is_vkey_disabled(result):
+    error = str(result.get("error", "")).lower()
+    return "virtual key is not enabled" in error or "vkey" in error and "not enabled" in error
+
+
+def _set_toggle(session, element_id, value):
+    """重放 radio/checkbox。Radio 的 False 通常是選中另一個 radio 的副作用，因此跳過。"""
+    target = _as_bool(value)
+
+    if _is_radio_field(element_id) and not target:
+        return {
+            "success": True,
+            "action": "study_skip_radio_false",
+            "element_id": element_id,
+            "message": "Radio=False 通常由同群組其他 Radio=True 造成，已略過",
+        }
+
+    try:
+        element = session.FindById(element_id)
+        current = bool(getattr(element, "Selected", False))
+        if current == target:
+            return {
+                "success": True,
+                "action": "study_toggle_noop",
+                "element_id": element_id,
+                "value": value,
+                "message": "目前狀態已符合錄製值",
+            }
+    except Exception:
+        pass
+
+    return click(session, element_id)
+
+
+def _send_study_screen_change(session):
+    """重放錄製到的畫面跳轉；F8 未啟用時改送 Enter。"""
+    execute_result = send_vkey(session, 8)
+    if execute_result.get("success"):
+        execute_result["study_note"] = "錄製只偵測到畫面跳轉；Study Mode 已送出 F8/Execute"
+        return execute_result
+
+    if not _is_vkey_disabled(execute_result):
+        return execute_result
+
+    enter_result = send_vkey(session, 0)
+    enter_result["fallback_from"] = execute_result
+    if enter_result.get("success"):
+        enter_result["study_note"] = "F8/Execute 未啟用，已改送 Enter 重放畫面跳轉"
+    else:
+        enter_result["error"] = (
+            f"F8/Execute 未啟用，改送 Enter 仍失敗: {enter_result.get('error')}"
+        )
+    return enter_result
+
+
+def execute_study_event(session, event, previous_event=None, next_event=None):
+    """依照錄製事件的語意重放單一步驟。"""
+    event_type = event.get("event_type", "")
+    details = event.get("details", {})
+
+    if event_type == "FIELD_CHANGE":
+        element_id = details.get("element_id", "")
+        value = str(details.get("to_value", ""))
+
+        if not element_id:
+            return {"success": False, "action": "study_field", "error": "缺少 element_id"}
+        next_tcode = _next_event_tcode(next_event)
+        if (
+            _is_okcode_field(element_id)
+            and next_tcode
+            and value.strip().upper() == next_tcode.upper()
+        ):
+            command, used_prefix, current_tcode = _study_tcode_command(session, value)
+            result = set_text(session, element_id=element_id, value=command)
+            if result.get("success") and used_prefix:
+                result["study_note"] = (
+                    f"目前不在起始畫面 ({current_tcode or 'N/A'})，已將 T-Code 改為 {command}"
+                )
+            return result
+        if _is_combo_field(element_id):
+            return select_combo(session, element_id=element_id, value=value)
+        if _is_radio_field(element_id) or _is_checkbox_field(element_id):
+            return _set_toggle(session, element_id, value)
+        return set_text(session, element_id=element_id, value=value)
+
+    if event_type == "TCODE_CHANGE":
+        to_tcode = str(details.get("to_tcode", "")).strip()
+        if not to_tcode:
+            return {"success": False, "action": "study_tcode", "error": "缺少 to_tcode"}
+
+        prev_details = (previous_event or {}).get("details", {})
+        prev_was_okcode = (
+            (previous_event or {}).get("event_type") == "FIELD_CHANGE"
+            and _is_okcode_field(prev_details.get("element_id", ""))
+            and str(prev_details.get("to_value", "")).strip().upper() == to_tcode.upper()
+        )
+        if prev_was_okcode:
+            return send_vkey(session, 0)
+        command, used_prefix, current_tcode = _study_tcode_command(session, to_tcode)
+        result = set_tcode(session, command)
+        if result.get("success") and used_prefix:
+            result["study_note"] = (
+                f"目前不在起始畫面 ({current_tcode or 'N/A'})，已將 T-Code 改為 {command}"
+            )
+        return result
+
+    if event_type == "SCREEN_CHANGE":
+        return _send_study_screen_change(session)
+
+    return {
+        "success": True,
+        "action": "study_observe",
+        "event_type": event_type,
+        "message": "此事件是觀察型事件，Study Mode 不執行 SAP 動作",
+    }
+
+
+def run_study(recorder, sap, name, delay_seconds=STUDY_STEP_DELAY_SECONDS):
+    """執行已錄製 SOP，每個 SOP step 後固定等待。"""
+    data = recorder.load_recording(name)
+    events = data.get("events", [])
+
+    if not events:
+        print(f"\n{Colors.YELLOW}  SOP '{name}' 沒有可執行步驟{Colors.RESET}\n")
+        return
+
+    print(f"\n{Colors.CYAN}▶ Study Mode: {name}{Colors.RESET}")
+    print(f"{Colors.DIM}  共 {len(events)} 個 SOP 步驟，每步間隔 {delay_seconds} 秒{Colors.RESET}\n")
+
+    previous_event = None
+    for index, event in enumerate(events, 1):
+        next_event = events[index] if index < len(events) else None
+        print(f"{Colors.WHITE}  [{index}/{len(events)}] {_event_title(event)}{Colors.RESET}")
+
+        try:
+            session = sap.get_session()
+            result = execute_study_event(
+                session,
+                event,
+                previous_event=previous_event,
+                next_event=next_event,
+            )
+        except ConnectionError as e:
+            print(f"{Colors.RED}     SAP 連線已斷開: {e}{Colors.RESET}")
+            break
+        except Exception as e:
+            result = {"success": False, "action": "study", "error": str(e)}
+
+        if result.get("success"):
+            note = result.get("study_note") or result.get("message") or result.get("action", "完成")
+            print(f"{Colors.GREEN}     ✓ {note}{Colors.RESET}")
+        else:
+            print(f"{Colors.RED}     ✗ {result.get('error') or result.get('message') or result}{Colors.RESET}")
+            print(f"{Colors.YELLOW}     已停止 Study Mode，請先處理目前 SAP 畫面再重試{Colors.RESET}\n")
+            return
+
+        previous_event = event
+        if index < len(events):
+            print(f"{Colors.DIM}     等待 {delay_seconds} 秒...{Colors.RESET}")
+            time.sleep(delay_seconds)
+
+    print(f"\n{Colors.GREEN}  ✅ Study Mode 執行完成: {name}{Colors.RESET}\n")
 
 
 def get_mode_indicator(agent_mode, recorder):
@@ -232,6 +515,7 @@ def main():
     print(f"\n{Colors.GREEN}{'═' * 50}{Colors.RESET}")
     print(f"{Colors.GREEN}  🚀 SAP GUI Copilot 已就緒！{Colors.RESET}")
     print(f"{Colors.GREEN}  📍 當前模式: {Colors.MAGENTA}🟣 Auto Mode（自動代操）{Colors.RESET}")
+    print(f"{Colors.GREEN}  🧠 Copilot Model: {Colors.WHITE}{agent.model}{Colors.RESET}")
     print(f"{Colors.GREEN}{'═' * 50}{Colors.RESET}\n")
 
     # ===== REPL 迴圈 =====
@@ -275,7 +559,7 @@ def main():
                 print(f"{Colors.GREEN}  ✅ 對話歷史已重置{Colors.RESET}")
 
             # --- /record [名稱] ---
-            elif cmd.startswith("/record"):
+            elif cmd == "/record" or cmd.startswith("/record "):
                 parts = user_input.split(maxsplit=1)
                 if len(parts) < 2 or not parts[1].strip():
                     print(f"{Colors.YELLOW}  用法: /record [SOP名稱]{Colors.RESET}")
@@ -323,7 +607,7 @@ def main():
                 print_recordings_list(recorder)
 
             # --- /play [名稱] ---
-            elif cmd.startswith("/play"):
+            elif cmd == "/play" or cmd.startswith("/play "):
                 parts = user_input.split(maxsplit=1)
                 if len(parts) < 2 or not parts[1].strip():
                     print(f"{Colors.YELLOW}  用法: /play [SOP名稱]{Colors.RESET}")
@@ -332,6 +616,26 @@ def main():
 
                 sop_name = parts[1].strip()
                 print_recording_steps(recorder, sop_name)
+
+            # --- /study [名稱] ---
+            elif cmd == "/study" or cmd.startswith("/study "):
+                if recorder.is_recording:
+                    print(f"{Colors.YELLOW}  請先 /stop 結束錄製，再執行 /study{Colors.RESET}")
+                    continue
+
+                parts = user_input.split(maxsplit=1)
+                if len(parts) < 2 or not parts[1].strip():
+                    print(f"{Colors.YELLOW}  用法: /study [SOP名稱]{Colors.RESET}")
+                    print(f"{Colors.DIM}  使用 /recordings 查看所有錄製{Colors.RESET}")
+                    continue
+
+                sop_name = parts[1].strip()
+                agent.set_mode("auto")
+                try:
+                    run_study(recorder, sap, sop_name)
+                except FileNotFoundError:
+                    print(f"\n{Colors.RED}  找不到錄製: '{sop_name}'{Colors.RESET}")
+                    print(f"{Colors.DIM}  使用 /recordings 查看所有錄製{Colors.RESET}\n")
 
             # --- /ask ---
             elif cmd == "/ask":
@@ -348,7 +652,7 @@ def main():
             # --- 未知指令 ---
             elif user_input.startswith("/"):
                 print(f"{Colors.YELLOW}  未知指令: {user_input}{Colors.RESET}")
-                print(f"{Colors.DIM}  可用指令: /scan, /record, /stop, /recordings, /play, /ask, /auto, /login, /reset, /quit{Colors.RESET}")
+                print(f"{Colors.DIM}  可用指令: /scan, /record, /stop, /recordings, /play, /study, /ask, /auto, /login, /reset, /quit{Colors.RESET}")
 
             # ===== 自然語言指令 → AI Agent =====
             else:

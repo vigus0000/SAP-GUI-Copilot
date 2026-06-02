@@ -10,7 +10,7 @@ subprocess.Popen(os.getenv("SAP_GUI_PATH"))
 time.sleep(15)
 sapgui_auto = win32com.client.GetObject("SAPGUI")
 application = sapgui_auto.GetScriptingEngine
-connection = application.OpenConnection("NCU ERP Server", True)
+connection = application.OpenConnection(os.getenv("connection"), True)
 
 # 連接到SAP GUI(登入)
 session = connection.Children(0)

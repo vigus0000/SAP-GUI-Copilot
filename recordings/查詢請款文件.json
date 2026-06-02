@@ -1,0 +1,217 @@
+{
+  "name": "查詢請款文件",
+  "created_at": "2026-06-02T20:40:49.196222",
+  "duration_seconds": 18.3,
+  "event_count": 8,
+  "raw_event_count": 11,
+  "raw_events": [
+    {
+      "timestamp": "2026-06-02T20:40:54.126301",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/tbar[0]/okcd",
+        "from_value": "",
+        "to_value": "VF",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100"
+      }
+    },
+    {
+      "timestamp": "2026-06-02T20:40:55.093506",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/tbar[0]/okcd",
+        "from_value": "VF",
+        "to_value": "VF05",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100"
+      }
+    },
+    {
+      "timestamp": "2026-06-02T20:40:55.904276",
+      "event_type": "TCODE_CHANGE",
+      "details": {
+        "from_tcode": "SESSION_MANAGER",
+        "to_tcode": "VF05",
+        "screen_number": "100",
+        "title": "    開立發票文件列表"
+      }
+    },
+    {
+      "timestamp": "2026-06-02T20:40:55.904276",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtFACOM-FKDAT",
+        "from_value": "",
+        "to_value": "2026/05/03",
+        "tcode": "VF05",
+        "screen_number": "100"
+      }
+    },
+    {
+      "timestamp": "2026-06-02T20:40:55.904276",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtFACOM-FKDAT_BIS",
+        "from_value": "",
+        "to_value": "2026/06/02",
+        "tcode": "VF05",
+        "screen_number": "100"
+      }
+    },
+    {
+      "timestamp": "2026-06-02T20:40:55.904276",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/radFACOM-VBOFF",
+        "from_value": "",
+        "to_value": "False",
+        "tcode": "VF05",
+        "screen_number": "100"
+      }
+    },
+    {
+      "timestamp": "2026-06-02T20:40:55.904276",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/radFACOM-VBALL",
+        "from_value": "",
+        "to_value": "True",
+        "tcode": "VF05",
+        "screen_number": "100"
+      }
+    },
+    {
+      "timestamp": "2026-06-02T20:40:58.386969",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtFACOM-KUNDE",
+        "from_value": "",
+        "to_value": "C00",
+        "tcode": "VF05",
+        "screen_number": "100"
+      }
+    },
+    {
+      "timestamp": "2026-06-02T20:40:59.257577",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtFACOM-KUNDE",
+        "from_value": "C00",
+        "to_value": "C000",
+        "tcode": "VF05",
+        "screen_number": "100"
+      }
+    },
+    {
+      "timestamp": "2026-06-02T20:41:00.113817",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtFACOM-KUNDE",
+        "from_value": "C000",
+        "to_value": "C0001",
+        "tcode": "VF05",
+        "screen_number": "100"
+      }
+    },
+    {
+      "timestamp": "2026-06-02T20:41:02.303153",
+      "event_type": "SCREEN_CHANGE",
+      "details": {
+        "tcode": "VF05",
+        "from_screen": "100",
+        "to_screen": "500",
+        "title": "    開立發票文件列表"
+      }
+    }
+  ],
+  "events": [
+    {
+      "timestamp": "2026-06-02T20:40:55.093506",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/tbar[0]/okcd",
+        "from_value": "",
+        "to_value": "VF05",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100"
+      }
+    },
+    {
+      "timestamp": "2026-06-02T20:40:55.904276",
+      "event_type": "TCODE_CHANGE",
+      "details": {
+        "from_tcode": "SESSION_MANAGER",
+        "to_tcode": "VF05",
+        "screen_number": "100",
+        "title": "    開立發票文件列表"
+      }
+    },
+    {
+      "timestamp": "2026-06-02T20:40:55.904276",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtFACOM-FKDAT",
+        "from_value": "",
+        "to_value": "2026/05/03",
+        "tcode": "VF05",
+        "screen_number": "100"
+      }
+    },
+    {
+      "timestamp": "2026-06-02T20:40:55.904276",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtFACOM-FKDAT_BIS",
+        "from_value": "",
+        "to_value": "2026/06/02",
+        "tcode": "VF05",
+        "screen_number": "100"
+      }
+    },
+    {
+      "timestamp": "2026-06-02T20:40:55.904276",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/radFACOM-VBOFF",
+        "from_value": "",
+        "to_value": "False",
+        "tcode": "VF05",
+        "screen_number": "100"
+      }
+    },
+    {
+      "timestamp": "2026-06-02T20:40:55.904276",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/radFACOM-VBALL",
+        "from_value": "",
+        "to_value": "True",
+        "tcode": "VF05",
+        "screen_number": "100"
+      }
+    },
+    {
+      "timestamp": "2026-06-02T20:41:00.113817",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtFACOM-KUNDE",
+        "from_value": "",
+        "to_value": "C0001",
+        "tcode": "VF05",
+        "screen_number": "100"
+      }
+    },
+    {
+      "timestamp": "2026-06-02T20:41:02.303153",
+      "event_type": "SCREEN_CHANGE",
+      "details": {
+        "tcode": "VF05",
+        "from_screen": "100",
+        "to_screen": "500",
+        "title": "    開立發票文件列表"
+      }
+    }
+  ],
+  "summary": "涉及交易: VF05，修改了 6 個欄位，偵測到 1 個畫面/視窗變化，共 8 個操作步驟"
+}

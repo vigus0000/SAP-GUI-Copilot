@@ -13,7 +13,15 @@ LLM Agent 大腦 — GitHub Copilot 版
 """
 
 import json
+import os
+import time
 import requests
+
+try:
+    import dotenv
+    dotenv.load_dotenv()
+except Exception:
+    pass
 
 from copilot_auth import CopilotAuth
 from sap_agent_tools import (
@@ -22,23 +30,30 @@ from sap_agent_tools import (
     TOOL_FUNCTIONS,
     confirmed_click,
     confirmed_send_vkey,
+    confirmed_handle_popup,
 )
 
 # GitHub Copilot Chat Completions API
 COPILOT_CHAT_URL = "https://api.githubcopilot.com/chat/completions"
 
-# 預設模型
-DEFAULT_MODEL = "gpt-4o"
+# 預設模型。可用 .env 的 COPILOT_MODEL 覆寫；不要再硬寫已退場的 gpt-4o。
+DEFAULT_MODEL = os.getenv("COPILOT_MODEL", "gpt-5-mini")
 
 # 最大 ReAct 迴圈次數（防止無限迴圈）
-MAX_ITERATIONS = 10
+MAX_ITERATIONS = int(os.getenv("COPILOT_MAX_ITERATIONS", "6"))
+
+# Copilot API 節流/重試設定
+COPILOT_MAX_RETRIES = int(os.getenv("COPILOT_MAX_RETRIES", "4"))
+COPILOT_RETRY_BASE_SECONDS = float(os.getenv("COPILOT_RETRY_BASE_SECONDS", "2"))
+COPILOT_RETRY_MAX_SECONDS = float(os.getenv("COPILOT_RETRY_MAX_SECONDS", "60"))
+CONVERSATION_HISTORY_LIMIT = int(os.getenv("COPILOT_HISTORY_LIMIT", "14"))
 
 # System Prompt - Auto Mode (可執行操作)
 SYSTEM_PROMPT_AUTO = """你是一個專業的 SAP GUI 操作助手。你可以透過工具來操作 SAP 系統。
 
 ## 你的能力
 1. 閱讀 SAP 畫面的結構化 JSON，理解當前畫面的狀態、欄位、按鈕
-2. 使用工具 (set_text, click, send_vkey, set_tcode) 來操作 SAP 畫面
+2. 使用工具 (set_text, select_combo, set_editor_text, click, send_vkey, set_tcode, handle_popup) 來操作 SAP 畫面
 3. 根據狀態列訊息判斷操作是否成功
 
 ## 工作流程 (ReAct Loop)
@@ -49,6 +64,16 @@ SYSTEM_PROMPT_AUTO = """你是一個專業的 SAP GUI 操作助手。你可以�
 
 ## 重要規則
 - 操作前先仔細閱讀畫面 JSON，確認元件 ID 正確
+- 如果畫面 JSON 有 active_popup 或 popup_wnd1，代表目前有 SAP 彈出視窗；請先處理彈窗，再操作主視窗
+- 處理彈窗時優先使用 handle_popup；例如填寫彈窗「標題」後按儲存，使用 handle_popup(action="save", field_label="標題", value="...")
+- 如果 active_popup 的 title 是「錯誤」或 messages 有錯誤文字，先讀 messages 判斷原因；通常要先 handle_popup(action="ok") 關閉最上層錯誤，再依下一層彈窗的 fields 補齊空白/焦點欄位
+- screen JSON 中的 fields 會把欄位 label 與元件 ID 配對；填欄位時優先使用 fields 裡的 id 或 handle_popup(field_label=...)
+- 如果 fields 的 type 是 GuiComboBox、dropdown=true 或含 options，代表下拉式選單；必須使用 select_combo，或在彈窗中用 handle_popup 依 label 選值，不要把它當一般文字欄位 set_text
+- 下拉式選單若有 options，優先用 option key；沒有 key 時才用顯示文字
+- 如果 scan 結果有 editors、role=editor、或 type=GuiShell 的 ABAP editor，代表程式碼編輯器；寫入 ABAP 原始碼時必須使用 set_editor_text，不要用 set_text
+- set_editor_text 可不傳 element_id，工具會自動尋找目前畫面的 editor；如果 screen_after.editors 有 id，優先傳該 id
+- 對彈窗發送 Enter/F12 等按鍵時，若不用 handle_popup，send_vkey 會自動送到活動彈窗，也可明確指定 window_id="wnd[1]"
+        - 每次工具結果都可能包含 screen_after；後續操作必須以 screen_after 的最新元件 ID 為準，不要沿用舊畫面的 ID 或猜測不存在的 ID
 - 如果操作失敗，嘗試分析原因並提出替代方案
 - 遇到不確定的情況，向使用者詢問
 - 使用繁體中文回覆使用者
@@ -143,10 +168,8 @@ class SAPAgent:
         Raises:
             RuntimeError: API 呼叫失敗
         """
-        token = self.auth.get_token()
-
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {self.auth.get_token()}",
             "Content-Type": "application/json",
             "Editor-Version": "vscode/1.100.0",
             "Editor-Plugin-Version": "copilot-chat/0.24.0",
@@ -164,20 +187,9 @@ class SAPAgent:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
-        try:
-            resp = requests.post(
-                COPILOT_CHAT_URL,
-                headers=headers,
-                json=payload,
-                timeout=60,
-            )
-
-            if resp.status_code == 401:
-                # Token 過期，嘗試刷新後重試
-                print("\033[33m[Agent] Copilot Token 過期，正在刷新...\033[0m")
-                self.auth._refresh_copilot_token()
-                token = self.auth.get_token()
-                headers["Authorization"] = f"Bearer {token}"
+        last_error = None
+        for attempt in range(COPILOT_MAX_RETRIES + 1):
+            try:
                 resp = requests.post(
                     COPILOT_CHAT_URL,
                     headers=headers,
@@ -185,25 +197,82 @@ class SAPAgent:
                     timeout=60,
                 )
 
-            if resp.status_code != 200:
-                raise RuntimeError(
-                    f"Copilot API 呼叫失敗: {resp.status_code}\n{resp.text}"
-                )
+                if resp.status_code == 401:
+                    # Token 過期，嘗試刷新後重試
+                    print("\033[33m[Agent] Copilot Token 過期，正在刷新...\033[0m")
+                    self.auth._refresh_copilot_token()
+                    headers["Authorization"] = f"Bearer {self.auth.get_token()}"
+                    continue
 
-            result = resp.json()
+                if resp.status_code in (429, 500, 502, 503, 504):
+                    last_error = self._format_api_error(resp)
+                    if attempt < COPILOT_MAX_RETRIES:
+                        wait_time = self._retry_delay_seconds(resp, attempt)
+                        print(
+                            "\033[33m"
+                            f"[Agent] Copilot API {resp.status_code}，"
+                            f"{wait_time:.1f} 秒後重試 "
+                            f"({attempt + 1}/{COPILOT_MAX_RETRIES})，model={self.model}"
+                            "\033[0m"
+                        )
+                        time.sleep(wait_time)
+                        continue
 
-            # 偵錯：檢查回應結構
-            if "choices" not in result:
-                print(f"\033[33m[Agent] API 回應缺少 choices 欄位: {json.dumps(result, ensure_ascii=False)[:500]}\033[0m")
-            elif len(result["choices"]) == 0:
-                print(f"\033[33m[Agent] API 回應 choices 為空陣列\033[0m")
+                if resp.status_code != 200:
+                    raise RuntimeError(self._format_api_error(resp))
 
-            return result
+                result = resp.json()
 
-        except requests.Timeout:
-            raise RuntimeError("Copilot API 回應逾時 (60s)")
-        except requests.RequestException as e:
-            raise RuntimeError(f"網路請求失敗: {e}")
+                # 偵錯：檢查回應結構
+                if "choices" not in result:
+                    print(f"\033[33m[Agent] API 回應缺少 choices 欄位: {json.dumps(result, ensure_ascii=False)[:500]}\033[0m")
+                elif len(result["choices"]) == 0:
+                    print(f"\033[33m[Agent] API 回應 choices 為空陣列\033[0m")
+
+                return result
+
+            except requests.Timeout:
+                last_error = "Copilot API 回應逾時 (60s)"
+                if attempt < COPILOT_MAX_RETRIES:
+                    wait_time = self._retry_delay_seconds(None, attempt)
+                    print(f"\033[33m[Agent] {last_error}，{wait_time:.1f} 秒後重試 ({attempt + 1}/{COPILOT_MAX_RETRIES})\033[0m")
+                    time.sleep(wait_time)
+                    continue
+                raise RuntimeError(last_error)
+
+            except requests.RequestException as e:
+                last_error = f"網路請求失敗: {e}"
+                if attempt < COPILOT_MAX_RETRIES:
+                    wait_time = self._retry_delay_seconds(None, attempt)
+                    print(f"\033[33m[Agent] {last_error}，{wait_time:.1f} 秒後重試 ({attempt + 1}/{COPILOT_MAX_RETRIES})\033[0m")
+                    time.sleep(wait_time)
+                    continue
+                raise RuntimeError(last_error)
+
+        raise RuntimeError(last_error or "Copilot API 呼叫失敗")
+
+    def _retry_delay_seconds(self, resp, attempt):
+        """依 Retry-After 或 exponential backoff 計算等待時間。"""
+        if resp is not None:
+            retry_after = resp.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    return min(float(retry_after), COPILOT_RETRY_MAX_SECONDS)
+                except ValueError:
+                    pass
+
+        delay = COPILOT_RETRY_BASE_SECONDS * (2 ** attempt)
+        return min(delay, COPILOT_RETRY_MAX_SECONDS)
+
+    def _format_api_error(self, resp):
+        retry_after = resp.headers.get("Retry-After")
+        retry_part = f"\nRetry-After: {retry_after}" if retry_after else ""
+        return (
+            f"Copilot API 呼叫失敗: {resp.status_code}"
+            f"\nmodel: {self.model}"
+            f"{retry_part}"
+            f"\n{resp.text}"
+        )
 
     def _execute_tool_call(self, session, tool_name, tool_args):
         """
@@ -224,6 +293,80 @@ class SAPAgent:
 
         # 呼叫工具函數（所有工具的第一個參數都是 session）
         return tool_func(session, **tool_args)
+
+    def _screen_summary(self, screen_state):
+        """產生給終端機看的簡短畫面摘要。"""
+        active_popup = screen_state.get("active_popup") or {}
+        return {
+            "tcode": screen_state.get("tcode", ""),
+            "title": screen_state.get("title", ""),
+            "screen_number": screen_state.get("screen_number", ""),
+            "active_window": screen_state.get("active_window", ""),
+            "focused_element": screen_state.get("focused_element"),
+            "status_bar": screen_state.get("status_bar", {}),
+            "fields": self._compact_fields(screen_state.get("fields", [])),
+            "messages": screen_state.get("messages", [])[:10],
+            "editors": screen_state.get("editors", [])[:10],
+            "active_popup": {
+                "id": active_popup.get("id", ""),
+                "title": active_popup.get("title", ""),
+                "actions": active_popup.get("actions", []),
+                "messages": active_popup.get("messages", [])[:10],
+                "fields": self._compact_fields(active_popup.get("fields", [])),
+                "editors": active_popup.get("editors", [])[:10],
+                "focused_element": active_popup.get("focused_element"),
+                "element_count": len(active_popup.get("elements", [])),
+            } if active_popup else None,
+            "element_count": len(screen_state.get("elements", [])),
+        }
+
+    def _compact_fields(self, fields, max_fields=20, max_options=12):
+        compacted = []
+        for field in fields[:max_fields]:
+            item = dict(field)
+            if "options" in item:
+                item["options"] = item.get("options", [])[:max_options]
+                item["options_truncated"] = len(field.get("options", [])) > max_options
+            compacted.append(item)
+        return compacted
+
+    def _screen_context(self, screen_state):
+        """給 LLM 的畫面上下文，保留可操作摘要，避免傳完整 SAP DOM。"""
+        return self._screen_summary(screen_state)
+
+    def _attach_screen_after_tool(self, session, tool_result):
+        """工具執行後重新掃描 SAP，讓下一輪推理看到最新畫面。"""
+        try:
+            screen_state = scan_sap_screen(session)
+            screen_summary = self._screen_summary(screen_state)
+            tool_result["screen_after"] = screen_summary
+            tool_result["screen_summary"] = screen_summary
+        except Exception as e:
+            tool_result["screen_after_error"] = f"工具執行後重新掃描失敗: {e}"
+        return tool_result
+
+    def _trim_conversation_history(self):
+        """跨使用者請求時裁切歷史，丟掉舊 tool trace，避免 payload 不斷膨脹。"""
+        if len(self.conversation_history) <= CONVERSATION_HISTORY_LIMIT:
+            return
+
+        system_messages = [
+            msg for msg in self.conversation_history
+            if msg.get("role") == "system"
+        ][:1]
+
+        compactable_messages = [
+            msg for msg in self.conversation_history
+            if (
+                msg.get("role") != "system"
+                and msg.get("role") != "tool"
+                and not msg.get("tool_calls")
+            )
+        ]
+        recent_messages = [
+            msg for msg in compactable_messages
+        ][-(CONVERSATION_HISTORY_LIMIT - len(system_messages)):]
+        self.conversation_history = system_messages + recent_messages
 
     def _handle_confirmation(self, session, tool_result, tool_name, tool_args):
         """
@@ -249,7 +392,19 @@ class SAPAgent:
                 if tool_name == "click":
                     return confirmed_click(session, tool_args["element_id"])
                 elif tool_name == "send_vkey":
-                    return confirmed_send_vkey(session, tool_args["vkey"])
+                    return confirmed_send_vkey(
+                        session,
+                        tool_args["vkey"],
+                        tool_args.get("window_id", ""),
+                    )
+                elif tool_name == "handle_popup":
+                    return confirmed_handle_popup(
+                        session,
+                        action=tool_args.get("action", "ok"),
+                        field_label=tool_args.get("field_label", ""),
+                        value=tool_args.get("value", ""),
+                        window_id=tool_args.get("window_id", ""),
+                    )
                 else:
                     # 其他工具直接執行
                     return self._execute_tool_call(session, tool_name, tool_args)
@@ -290,7 +445,7 @@ class SAPAgent:
         # 掃描當前畫面
         print("\033[90m[Agent] 正在掃描 SAP 畫面...\033[0m")
         screen_state = scan_sap_screen(session)
-        screen_json = json.dumps(screen_state, ensure_ascii=False, indent=2)
+        screen_json = json.dumps(self._screen_context(screen_state), ensure_ascii=False, indent=2)
 
         # 組合訊息
         combined_parts = [
@@ -303,6 +458,7 @@ class SAPAgent:
         combined_parts.append(f"\n## 使用者問題\n{user_message}")
 
         combined_message = "\n".join(combined_parts)
+        self._trim_conversation_history()
         self.conversation_history.append({"role": "user", "content": combined_message})
 
         # 呼叫 LLM（不傳 tools，禁止操作）
@@ -335,7 +491,7 @@ class SAPAgent:
         # Step 1: 掃描當前畫面
         print("\033[90m[Agent] 正在掃描 SAP 畫面...\033[0m")
         screen_state = scan_sap_screen(session)
-        screen_json = json.dumps(screen_state, ensure_ascii=False, indent=2)
+        screen_json = json.dumps(self._screen_context(screen_state), ensure_ascii=False, indent=2)
 
         # 組合訊息：畫面狀態 + 使用者指令
         combined_message = (
@@ -345,6 +501,7 @@ class SAPAgent:
         )
 
         # 加入對話歷史
+        self._trim_conversation_history()
         self.conversation_history.append({"role": "user", "content": combined_message})
 
         # Step 2-4: ReAct Loop (Think → Act → Verify)
@@ -407,7 +564,12 @@ class SAPAgent:
                         session, tool_result, tool_name, tool_args
                     )
 
-                print(f"\033[90m[Agent] 工具結果: {json.dumps(tool_result, ensure_ascii=False)}\033[0m")
+                tool_result = self._attach_screen_after_tool(session, tool_result)
+
+                console_result = dict(tool_result)
+                if "screen_after" in console_result:
+                    console_result["screen_after"] = console_result.get("screen_summary")
+                print(f"\033[90m[Agent] 工具結果: {json.dumps(console_result, ensure_ascii=False)}\033[0m")
 
                 self.conversation_history.append({
                     "role": "tool",

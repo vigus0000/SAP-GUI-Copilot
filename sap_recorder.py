@@ -13,6 +13,9 @@ import os
 from datetime import datetime
 
 
+NOISY_EVENT_TYPES = {"FOCUS_CHANGE"}
+
+
 # 錄製檔案儲存目錄
 RECORDINGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings")
 
@@ -21,6 +24,10 @@ RECORDINGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recor
 EVENT_TYPE_LABELS = {
     "TCODE_CHANGE": "🔄 交易切換",
     "SCREEN_CHANGE": "📄 畫面跳轉",
+    "ACTIVE_WINDOW_CHANGE": "🪟 活動視窗",
+    "WINDOW_OPEN": "🪟 彈窗開啟",
+    "WINDOW_CLOSE": "🪟 彈窗關閉",
+    "FOCUS_CHANGE": "🎯 焦點移動",
     "FIELD_CHANGE": "✏️ 欄位修改",
     "STATUS_MESSAGE": "💬 狀態訊息",
 }
@@ -80,6 +87,8 @@ class SAPRecorder:
             "created_at": self._recording_start_time.isoformat(),
             "duration_seconds": 0,
             "event_count": 0,
+            "raw_event_count": 0,
+            "raw_events": [],
             "events": [],
             "summary": "",
         }
@@ -104,8 +113,13 @@ class SAPRecorder:
 
         # 計算持續時間
         duration = (datetime.now() - self._recording_start_time).total_seconds()
+        raw_events = self._current_recording["raw_events"]
+        compacted_events = self._compact_events(raw_events)
+
         self._current_recording["duration_seconds"] = round(duration, 1)
-        self._current_recording["event_count"] = len(self._current_recording["events"])
+        self._current_recording["raw_event_count"] = len(raw_events)
+        self._current_recording["events"] = compacted_events
+        self._current_recording["event_count"] = len(compacted_events)
 
         # 自動產生摘要
         self._current_recording["summary"] = self._generate_summary(
@@ -118,8 +132,9 @@ class SAPRecorder:
             json.dump(self._current_recording, f, ensure_ascii=False, indent=2)
 
         event_count = self._current_recording["event_count"]
+        raw_event_count = self._current_recording["raw_event_count"]
         print(f"\n\033[1;32m  ⏹️ 錄製完成: {self._recording_name}\033[0m")
-        print(f"\033[90m     共記錄 {event_count} 個操作，持續 {duration:.1f} 秒\033[0m")
+        print(f"\033[90m     共記錄 {event_count} 個操作（原始事件 {raw_event_count} 個），持續 {duration:.1f} 秒\033[0m")
         print(f"\033[90m     已儲存至: {filepath}\033[0m")
 
         # 重置狀態
@@ -141,7 +156,7 @@ class SAPRecorder:
         if not self._is_recording or not self._current_recording:
             return
 
-        self._current_recording["events"].append(event)
+        self._current_recording["raw_events"].append(event)
 
         # 即時在 CLI 顯示偵測到的事件
         event_type = event.get("event_type", "UNKNOWN")
@@ -157,12 +172,18 @@ class SAPRecorder:
             # 只顯示最後一段 ID（更簡潔）
             short_id = elem_id.split("/")[-1] if "/" in elem_id else elem_id
             detail_str = f"{short_id} = \"{details.get('to_value', '')}\""
+        elif event_type in ("ACTIVE_WINDOW_CHANGE", "WINDOW_OPEN", "WINDOW_CLOSE"):
+            detail_str = f"{details.get('window_id', details.get('to_window', '?'))} {details.get('title', '')}"
+        elif event_type == "FOCUS_CHANGE":
+            elem_id = details.get("to_element", "?")
+            short_id = elem_id.split("/")[-1] if "/" in elem_id else elem_id
+            detail_str = short_id
         elif event_type == "STATUS_MESSAGE":
             detail_str = f"[{details.get('type', '?')}] {details.get('text', '')}"
         else:
             detail_str = json.dumps(details, ensure_ascii=False)[:60]
 
-        count = len(self._current_recording["events"])
+        count = len(self._current_recording["raw_events"])
         print(f"\033[31m  📝 [{count:3d}] {label}  {detail_str}\033[0m")
 
     def list_recordings(self) -> list:
@@ -183,13 +204,13 @@ class SAPRecorder:
 
             filepath = os.path.join(RECORDINGS_DIR, filename)
             try:
-                with open(filepath, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+                data = self.load_recording(os.path.splitext(filename)[0])
                 recordings.append({
                     "name": data.get("name", filename),
                     "created_at": data.get("created_at", ""),
                     "duration_seconds": data.get("duration_seconds", 0),
                     "event_count": data.get("event_count", 0),
+                    "raw_event_count": data.get("raw_event_count", data.get("event_count", 0)),
                     "summary": data.get("summary", ""),
                     "filepath": filepath,
                 })
@@ -216,7 +237,20 @@ class SAPRecorder:
             raise FileNotFoundError(f"找不到錄製: '{name}'")
 
         with open(filepath, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+
+        # 向後相容舊錄製：舊檔只有 events，讀取時動態產生 compact SOP。
+        if "raw_events" not in data:
+            raw_events = data.get("events", [])
+            compacted_events = self._compact_events(raw_events)
+            data = dict(data)
+            data["raw_events"] = raw_events
+            data["raw_event_count"] = len(raw_events)
+            data["events"] = compacted_events
+            data["event_count"] = len(compacted_events)
+            data["summary"] = self._generate_summary(compacted_events)
+
+        return data
 
     def get_recording_summary(self, name: str) -> str:
         """
@@ -236,6 +270,8 @@ class SAPRecorder:
         lines = [f"## SOP 錄製: {data.get('name', name)}"]
         lines.append(f"錄製時間: {data.get('created_at', 'N/A')}")
         lines.append(f"操作數量: {data.get('event_count', 0)}")
+        if data.get("raw_event_count") and data.get("raw_event_count") != data.get("event_count"):
+            lines.append(f"原始事件數量: {data.get('raw_event_count')}")
         lines.append(f"持續時間: {data.get('duration_seconds', 0)} 秒")
         lines.append("")
 
@@ -258,6 +294,16 @@ class SAPRecorder:
                 elem_id = details.get("element_id", "?")
                 short_id = elem_id.split("/")[-1] if "/" in elem_id else elem_id
                 step = f"填入欄位: {short_id} = \"{details.get('to_value', '')}\""
+            elif event_type == "ACTIVE_WINDOW_CHANGE":
+                step = f"活動視窗變更: {details.get('from_window', '?')} → {details.get('to_window', '?')} ({details.get('title', '')})"
+            elif event_type == "WINDOW_OPEN":
+                step = f"彈窗開啟: {details.get('window_id', '?')} ({details.get('title', '')})"
+            elif event_type == "WINDOW_CLOSE":
+                step = f"彈窗關閉: {details.get('window_id', '?')} ({details.get('title', '')})"
+            elif event_type == "FOCUS_CHANGE":
+                elem_id = details.get("to_element", "?")
+                short_id = elem_id.split("/")[-1] if "/" in elem_id else elem_id
+                step = f"焦點移動: {short_id}"
             elif event_type == "STATUS_MESSAGE":
                 step = f"狀態訊息: [{details.get('type', '?')}] {details.get('text', '')}"
             else:
@@ -273,6 +319,49 @@ class SAPRecorder:
         safe_name = "".join(c for c in name if c.isalnum() or c in (" ", "_", "-", ".", "（", "）"))
         safe_name = safe_name.strip() or "unnamed"
         return os.path.join(RECORDINGS_DIR, f"{safe_name}.json")
+
+    @staticmethod
+    def _compact_events(events: list) -> list:
+        """
+        將 raw polling events 壓縮成 SOP 步驟。
+
+        - 同一欄位連續 FIELD_CHANGE 只保留最後值
+        - FOCUS_CHANGE 這類純焦點移動不列入 SOP
+        - T-Code / screen / window / status 事件保留順序
+        """
+        compacted = []
+        pending_field = None
+
+        def flush_pending_field():
+            nonlocal pending_field
+            if pending_field:
+                compacted.append(pending_field)
+                pending_field = None
+
+        for event in events:
+            event_type = event.get("event_type", "")
+            if event_type in NOISY_EVENT_TYPES:
+                continue
+
+            if event_type == "FIELD_CHANGE":
+                details = event.get("details", {})
+                element_id = details.get("element_id", "")
+                if pending_field and pending_field.get("details", {}).get("element_id") == element_id:
+                    pending_details = pending_field["details"]
+                    pending_details["to_value"] = details.get("to_value", "")
+                    pending_details["tcode"] = details.get("tcode", pending_details.get("tcode", ""))
+                    pending_details["screen_number"] = details.get("screen_number", pending_details.get("screen_number", ""))
+                    pending_field["timestamp"] = event.get("timestamp", pending_field.get("timestamp", ""))
+                else:
+                    flush_pending_field()
+                    pending_field = json.loads(json.dumps(event, ensure_ascii=False))
+                continue
+
+            flush_pending_field()
+            compacted.append(event)
+
+        flush_pending_field()
+        return compacted
 
     @staticmethod
     def _generate_summary(events: list) -> str:
@@ -291,6 +380,7 @@ class SAPRecorder:
         parts = []
         tcodes = []
         field_changes = 0
+        screen_events = 0
 
         for event in events:
             event_type = event.get("event_type", "")
@@ -302,11 +392,15 @@ class SAPRecorder:
                     tcodes.append(to_tcode)
             elif event_type == "FIELD_CHANGE":
                 field_changes += 1
+            elif event_type in ("SCREEN_CHANGE", "ACTIVE_WINDOW_CHANGE", "WINDOW_OPEN", "WINDOW_CLOSE"):
+                screen_events += 1
 
         if tcodes:
             parts.append(f"涉及交易: {' → '.join(tcodes)}")
         if field_changes:
             parts.append(f"修改了 {field_changes} 個欄位")
+        if screen_events:
+            parts.append(f"偵測到 {screen_events} 個畫面/視窗變化")
         parts.append(f"共 {len(events)} 個操作步驟")
 
         return "，".join(parts)
