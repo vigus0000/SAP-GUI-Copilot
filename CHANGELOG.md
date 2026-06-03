@@ -6,6 +6,81 @@
 
 ---
 
+## [0.4.1] - 2026-06-03
+
+### Changed
+- **Study Mode 改為互動式參考引導**
+  - `recordings/` 與 `skills/` 的 SOP JSON 現在是流程參考資料，不再被視為必須逐字逐畫面重放的絕對腳本。
+  - 新增 `STUDY_ADAPTIVE_MODE=true` 預設設定。
+  - 欄位步驟若目前 SAP 欄位已有值，直接 Enter 會使用目前值作為本次預設；錄製值只顯示為參考值。
+  - 若目前已在目標 T-Code，OKCode / T-Code 參考步驟會自動略過，避免重送 Enter 造成流程跳動。
+  - 畫面跳轉若已離開起始畫面但未到錄製目標 screen，會進入互動式 review，由使用者決定接受目前狀態、重試、手動完成、略過或中止。
+
+## [0.4.0] - 2026-06-03
+
+### Added
+- **Phase 3 開發啟動**
+  - 版本進入 `V0.4.0 (Phase 3)`。
+  - Auto / Ask / Record / Study mode 已完成實測，Phase 3 轉向視覺化引導與技能庫。
+  - Phase 3 實作完成：Study Mode 已具備高亮引導、Skill Library、欄位語意提示、畫面跳轉驗證與 guided popup recovery。
+- **Study Mode 視覺化引導**
+  - 新增 `visualize_element()` 工具，封裝 SAP GUI `Visualize(True)` 與 `SetFocus`。
+  - Study Mode 欄位定位改用共用高亮工具，並由 `STUDY_VISUALIZE_SECONDS` 控制高亮停留秒數。
+  - `visualize_element()` 已加入工具 schema，後續 Auto Mode / UI 也可重用。
+  - 畫面跳轉步驟送出 F8/Enter 後會掃描驗證是否到達錄製目標 screen；若出現必填欄位彈窗、狀態列錯誤或仍停在原畫面，會進入 recovery，不再把最後一步誤判為完成。
+  - 新增 `STUDY_SCREEN_CHANGE_TIMEOUT_SECONDS` / `STUDY_SCREEN_CHANGE_POLL_SECONDS` 設定。
+  - Study Mode 欄位步驟會掃描目前畫面 `fields`，優先顯示 SAP label / tooltip / name，並附上目前值、欄位型別、畫面名稱與元件 ID，降低使用者只看到技術 ID 的情況。
+  - 放寬 scanner 的 label 對齊容忍度，並在 Study Mode 新增 near-label 二次推斷與常見 SAP 欄位字典 fallback，改善 `FACOM-KUNDE`、radio 等欄位偶爾抓不到 label 的情況。
+  - 新增 guided popup recovery：Study Mode 若被必填彈窗擋住，可逐欄高亮彈窗欄位、提示填值、讀回驗證，送出彈窗後再驗證原 SOP 目標畫面是否達成。
+- **Skill Library**
+  - 新增 `sap_skill_library.py`，統一讀取 SOP / Skill JSON。
+  - 新增 `skills/` 目錄，作為整理後的穩定教學流程存放位置。
+  - `/recordings`、`/play`、`/study` 改為透過 Skill Library 讀取；`skills/` 優先，其次 `recordings/`。
+
+### Changed
+- CLI banner 更新為 `V0.4.0 (Phase 3)`。
+- README / plan 更新 Phase 3 狀態與 Skill Library 架構。
+
+## [0.3.1] - 2026-06-03
+
+### Added
+- **啟動器 (`start.py`)**
+  - 新增一個統一啟動入口，先確認 SAP GUI 是否已有登入完成的 session。
+  - 若尚未登入 SAP，會執行 `sap_login.py`，並在登入後重新確認 session 狀態。
+  - 啟動 `main.py` 前會檢查 GitHub Copilot 授權；未登入或 token 失效時會自動進入授權流程。
+- **Windows 啟動批次檔 (`start.bat`)**
+  - 可直接在 Windows 以批次檔呼叫 `python start.py`。
+- **Study Mode human-in-the-loop**
+  - 新增 `STUDY_HUMAN_FIELD_INPUT` 設定，預設開啟。
+  - 新增 `STUDY_FOCUS_HUMAN_FIELDS` 設定，提示使用者輸入前會嘗試 focus/highlight 對應 SAP 欄位。
+  - 新增 `STUDY_PROMPT_FIELD_VALUES` 設定，錄製欄位值會作為本次執行的預設值，可在執行時覆寫。
+  - 新增 `STUDY_AUTOFILL_PROMPTED_VALUES` 設定，可選擇是否由 agent 嘗試自動填入欄位；預設為手動輸入後驗證。
+  - `/study` 現在會自動執行 T-Code、Enter、畫面跳轉、下拉式選單、radio/checkbox 等制式操作。
+  - 一般文字欄位會提示使用者輸入本次值；直接 Enter 使用錄製值，輸入新值會覆寫本次執行。
+  - 使用者在 SAP GUI 完成文字欄位輸入後，Study Mode 會讀回欄位值並確認是否符合本次值。
+- **SE38 / ABAP editor 專用讀寫**
+  - 新增 `read_editor_text()` 工具，可從目前 ABAP editor 讀取程式碼。
+  - `set_editor_text()` 會優先使用 `GuiAbapEditor` / `GuiTextedit` API 寫入，包含 `SelectAll + ReplaceSelection`、`SetSelectionIndexes + ReplaceSelection`、`SetUnprotectedTextPart`、`InsertText`。
+  - 寫入後會嘗試讀回比對，回傳 `verify` 結果。
+  - `/scan` 的 `editors` 會顯示 editor capabilities，方便確認 SAP GUI 是否暴露 `GetLineText`、`InsertText` 等方法。
+  - Ask Mode 偵測到 editor 時會自動讀取 source code 放入 `editor_sources`，可直接回答「這個程式是幹嘛的」。
+  - Editor 偵測不再只因元件文字含有 `ABAP` 就判定為 editor，避免 ATC、Examples 等 SAP 選單被誤判為程式碼來源。
+  - `read_editor_text()` 新增 `looks_like_source` 判斷；Ask Mode 會忽略不像 ABAP source 的 shell 內容，並回報候選元件讀取原因。
+  - 新增 `EDITOR_CONTEXT_MAX_CHARS` 設定，控制放入 LLM context 的 editor source 長度。
+
+### Changed
+- 從本版開始版本號調整為 `V0.3.1`。
+- README 的啟動方式改為推薦使用 `python start.py` 或 `start.bat`。
+- Study Mode 改為引導式半自動流程，降低 SAP GUI 特殊控制元件讀寫失敗造成 SOP 中斷的風險。
+- Study Mode 自動步驟失敗時可選擇 retry、manual、skip 或 abort，不再直接停止。
+- Study Mode 文字欄位驗證失敗時可選擇重新輸入、接受目前值、略過或中止。
+- 人工輸入步驟完成後不再額外等待 5 秒；只有自動步驟保留固定延遲。
+
+### Known Issues
+- **SE38 / ABAP editor 實機相容性仍需驗證**
+  - 已加入 `GuiAbapEditor` / `GuiTextedit` 專用讀寫路徑，但不同 SAP GUI / SAP_BASIS 版本可能暴露不同方法。
+  - 若 editor API 不可用，`set_editor_text()` 仍會 fallback 到剪貼簿貼上；Study Mode 中程式碼與一般文字欄位內容預設仍由使用者手動輸入並驗證。
+
 ## [0.3.0] - 2026-06-02
 
 ### Added

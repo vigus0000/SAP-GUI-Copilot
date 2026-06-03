@@ -26,6 +26,7 @@ except Exception:
 from copilot_auth import CopilotAuth
 from sap_agent_tools import (
     scan_sap_screen,
+    read_editor_text,
     TOOL_SCHEMAS,
     TOOL_FUNCTIONS,
     confirmed_click,
@@ -47,13 +48,14 @@ COPILOT_MAX_RETRIES = int(os.getenv("COPILOT_MAX_RETRIES", "4"))
 COPILOT_RETRY_BASE_SECONDS = float(os.getenv("COPILOT_RETRY_BASE_SECONDS", "2"))
 COPILOT_RETRY_MAX_SECONDS = float(os.getenv("COPILOT_RETRY_MAX_SECONDS", "60"))
 CONVERSATION_HISTORY_LIMIT = int(os.getenv("COPILOT_HISTORY_LIMIT", "14"))
+EDITOR_CONTEXT_MAX_CHARS = int(os.getenv("EDITOR_CONTEXT_MAX_CHARS", "12000"))
 
 # System Prompt - Auto Mode (可執行操作)
 SYSTEM_PROMPT_AUTO = """你是一個專業的 SAP GUI 操作助手。你可以透過工具來操作 SAP 系統。
 
 ## 你的能力
 1. 閱讀 SAP 畫面的結構化 JSON，理解當前畫面的狀態、欄位、按鈕
-2. 使用工具 (set_text, select_combo, set_editor_text, click, send_vkey, set_tcode, handle_popup) 來操作 SAP 畫面
+2. 使用工具 (set_text, select_combo, read_editor_text, set_editor_text, visualize_element, click, send_vkey, set_tcode, handle_popup) 來操作 SAP 畫面
 3. 根據狀態列訊息判斷操作是否成功
 
 ## 工作流程 (ReAct Loop)
@@ -70,8 +72,9 @@ SYSTEM_PROMPT_AUTO = """你是一個專業的 SAP GUI 操作助手。你可以�
 - screen JSON 中的 fields 會把欄位 label 與元件 ID 配對；填欄位時優先使用 fields 裡的 id 或 handle_popup(field_label=...)
 - 如果 fields 的 type 是 GuiComboBox、dropdown=true 或含 options，代表下拉式選單；必須使用 select_combo，或在彈窗中用 handle_popup 依 label 選值，不要把它當一般文字欄位 set_text
 - 下拉式選單若有 options，優先用 option key；沒有 key 時才用顯示文字
-- 如果 scan 結果有 editors、role=editor、或 type=GuiShell 的 ABAP editor，代表程式碼編輯器；寫入 ABAP 原始碼時必須使用 set_editor_text，不要用 set_text
-- set_editor_text 可不傳 element_id，工具會自動尋找目前畫面的 editor；如果 screen_after.editors 有 id，優先傳該 id
+- 如果 scan 結果有 editors、role=editor、editor_capabilities、type=GuiAbapEditor 或 type=GuiShell 的 ABAP editor，代表程式碼編輯器；讀取程式碼必須使用 read_editor_text，寫入 ABAP 原始碼必須使用 set_editor_text，不要用 set_text
+- read_editor_text / set_editor_text 可不傳 element_id，工具會自動尋找目前畫面的 editor；如果 screen_after.editors 有 id，優先傳該 id
+- 若需要引導使用者看見某個欄位或按鈕，可使用 visualize_element 高亮該元件；這是視覺提示，不代表已填值或點擊
 - 對彈窗發送 Enter/F12 等按鍵時，若不用 handle_popup，send_vkey 會自動送到活動彈窗，也可明確指定 window_id="wnd[1]"
         - 每次工具結果都可能包含 screen_after；後續操作必須以 screen_after 的最新元件 ID 為準，不要沿用舊畫面的 ID 或猜測不存在的 ID
 - 如果操作失敗，嘗試分析原因並提出替代方案
@@ -98,6 +101,8 @@ SYSTEM_PROMPT_ASK = """你是一個專業的 SAP GUI 問答助手。你**只回�
 ## 重要規則
 - **你不能呼叫任何工具**，只能用文字回答
 - 根據當前畫面 JSON 分析「這格該填什麼」「為何報錯」等問題
+- 如果畫面 JSON 有 `editor_sources` 且 success=true，代表已讀到 SE38/ABAP editor 的程式碼；回答程式用途時必須根據 `editor_sources[].text` 分析，不要再要求使用者貼程式碼
+- 如果 `editor_sources` 讀取失敗，說明讀取失敗原因，並請使用者切到程式碼 editor 或貼出程式碼
 - 如果提供了 SOP 紀錄，參考其步驟來引導使用者
 - 使用繁體中文回覆
 - 回覆時結構清晰，使用列表或步驟說明
@@ -307,6 +312,7 @@ class SAPAgent:
             "fields": self._compact_fields(screen_state.get("fields", [])),
             "messages": screen_state.get("messages", [])[:10],
             "editors": screen_state.get("editors", [])[:10],
+            "editor_sources": screen_state.get("editor_sources", []),
             "active_popup": {
                 "id": active_popup.get("id", ""),
                 "title": active_popup.get("title", ""),
@@ -333,6 +339,56 @@ class SAPAgent:
     def _screen_context(self, screen_state):
         """給 LLM 的畫面上下文，保留可操作摘要，避免傳完整 SAP DOM。"""
         return self._screen_summary(screen_state)
+
+    def _attach_editor_text_context(self, session, screen_state):
+        """Ask Mode 讀取目前 editor 內容，讓 LLM 能解釋程式用途。"""
+        editors = list(screen_state.get("editors", []))
+        active_popup = screen_state.get("active_popup") or {}
+        editors.extend(active_popup.get("editors", []))
+        if not editors:
+            return screen_state
+
+        valid_sources = []
+        rejected_sources = []
+        seen_ids = set()
+        for editor in editors[:8]:
+            element_id = editor.get("id", "")
+            if element_id in seen_ids:
+                continue
+            seen_ids.add(element_id)
+            read_result = read_editor_text(session, element_id=element_id)
+            item = {
+                "element_id": element_id,
+                "success": bool(read_result.get("success")),
+                "method": read_result.get("method", ""),
+                "line_count": read_result.get("line_count", 0),
+                "char_count": read_result.get("char_count", 0),
+                "looks_like_source": bool(read_result.get("looks_like_source")),
+            }
+            if read_result.get("success"):
+                text = str(read_result.get("text", ""))
+                if read_result.get("looks_like_source"):
+                    item["text"] = text[:EDITOR_CONTEXT_MAX_CHARS]
+                    item["truncated"] = len(text) > EDITOR_CONTEXT_MAX_CHARS
+                else:
+                    item["success"] = False
+                    item["error"] = read_result.get("warning") or "read text does not look like ABAP source"
+                    item["preview"] = text[:500]
+            else:
+                item["error"] = read_result.get("error", "")
+            if item.get("success"):
+                valid_sources.append(item)
+                if len(valid_sources) >= 3:
+                    break
+            else:
+                rejected_sources.append(item)
+
+        editor_sources = valid_sources or rejected_sources[:3]
+        if editor_sources:
+            enriched = dict(screen_state)
+            enriched["editor_sources"] = editor_sources
+            return enriched
+        return screen_state
 
     def _attach_screen_after_tool(self, session, tool_result):
         """工具執行後重新掃描 SAP，讓下一輪推理看到最新畫面。"""
@@ -445,6 +501,7 @@ class SAPAgent:
         # 掃描當前畫面
         print("\033[90m[Agent] 正在掃描 SAP 畫面...\033[0m")
         screen_state = scan_sap_screen(session)
+        screen_state = self._attach_editor_text_context(session, screen_state)
         screen_json = json.dumps(self._screen_context(screen_state), ensure_ascii=False, indent=2)
 
         # 組合訊息

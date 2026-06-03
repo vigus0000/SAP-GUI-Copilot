@@ -13,7 +13,7 @@ SAP GUI Copilot 是一個以 Python 打造的 SAP GUI 智慧助手，透過 COM 
 | 🟣 **Auto Mode** | 用自然語言下指令，AI 自動操作 SAP 畫面（ReAct Loop：掃描 → 思考 → 執行 → 驗證） |
 | 🟢 **Ask Mode** | 結合當前畫面狀態的 Context-Aware 問答，回答「這格該填什麼」「為何報錯」 |
 | 🔴 **Record Mode** | 背景錄製使用者的 SAP 操作流程，自動產生 JSON 格式的 SOP 腳本 |
-| ▶ **Study Mode** | 使用 `/study [名稱]` 在 Auto Mode 重放錄製 SOP，每個 SOP 步驟間隔 5 秒 |
+| ▶ **Study Mode** | 使用 `/study [名稱]` 執行 SOP / Skill，透過 `Visualize(True)` 高亮欄位並引導使用者 |
 | 🪟 **Popup-aware Scanner** | 可解析 SAP 多層彈窗、錯誤訊息、焦點欄位、下拉選單、Editor，以及 label ↔ input 對應 |
 | 🔁 **畫面切換自癒** | 每次工具操作後重新掃描 SAP，避免沿用舊畫面元件 ID |
 | 🔒 **Human-in-the-loop** | 敏感操作（儲存、刪除、過帳）強制人工確認，杜絕 AI 寫入錯誤資料 |
@@ -27,7 +27,7 @@ SAP GUI Copilot 是一個以 Python 打造的 SAP GUI 智慧助手，透過 COM 
 ```
 ┌──────────────────────────────────────────────────────┐
 │                   main.py (CLI REPL)                 │
-│         🟣 Auto  │  🟢 Ask  │  🔴 Record            │
+│   🟣 Auto │ 🟢 Ask │ 🔴 Record │ ▶ Study          │
 ├──────────┬───────┴──────────┴───────┬────────────────┤
 │          │                          │                │
 │  llm_brain.py              sap_monitor.py           │
@@ -37,6 +37,8 @@ SAP GUI Copilot 是一個以 Python 打造的 SAP GUI 智慧助手，透過 COM 
 │          ▼                          ▼                │
 │  sap_agent_tools.py         sap_recorder.py         │
 │  (Scanner + Actor)          (SOP JSON Manager)       │
+│          │                                           │
+│  sap_skill_library.py ── skills/ + recordings/       │
 │          │                                           │
 │          ▼                                           │
 │  sap_core.py ──── SAP GUI COM Interface ──── SAP    │
@@ -56,7 +58,7 @@ SAP GUI Copilot 是一個以 Python 打造的 SAP GUI 智慧助手，透過 COM 
 | LLM 後端 | GitHub Copilot API (`api.githubcopilot.com`) |
 | 認證 | GitHub OAuth Device Flow |
 | 監控策略 | Polling-based Snapshot Diff（取代不穩定的 `WithEvents`） |
-| SOP 儲存 | JSON 檔案 (`./recordings/`) |
+| SOP / Skill 儲存 | JSON 檔案 (`./skills/`, `./recordings/`) |
 | 套件管理 | `uv` |
 
 ---
@@ -106,9 +108,18 @@ COPILOT_HISTORY_LIMIT=14
 COPILOT_MAX_RETRIES=4
 COPILOT_RETRY_BASE_SECONDS=2
 COPILOT_RETRY_MAX_SECONDS=60
+EDITOR_CONTEXT_MAX_CHARS=12000
 
 # Study Mode
 STUDY_PREFIX_TCODE_OUTSIDE_START=true
+STUDY_ADAPTIVE_MODE=true
+STUDY_HUMAN_FIELD_INPUT=true
+STUDY_FOCUS_HUMAN_FIELDS=true
+STUDY_VISUALIZE_SECONDS=1.2
+STUDY_SCREEN_CHANGE_TIMEOUT_SECONDS=8
+STUDY_SCREEN_CHANGE_POLL_SECONDS=0.5
+STUDY_PROMPT_FIELD_VALUES=true
+STUDY_AUTOFILL_PROMPTED_VALUES=false
 STUDY_INITIAL_TCODES=SESSION_MANAGER,S000
 ```
 
@@ -138,14 +149,14 @@ STUDY_INITIAL_TCODES=SESSION_MANAGER,S000
 ### 使用
 
 ```bash
-# 1. 登入 SAP GUI（或手動登入）
-python sap_login.py
+# 推薦：先檢查 SAP / Copilot 登入，再啟動主程式
+python start.py
 
-# 2. 啟動 Copilot（首次會引導 GitHub 授權）
-python main.py
+# Windows 也可直接執行
+start.bat
 ```
 
-首次啟動時，程式會顯示 GitHub Device Flow 授權碼，在瀏覽器中完成授權後即可使用。
+`start.py` 會先確認 SAP GUI 是否已登入；若尚未登入，會執行 `sap_login.py`。接著檢查 GitHub Copilot 授權，完成後啟動 `main.py`。首次啟動時，程式會顯示 GitHub Device Flow 授權碼，在瀏覽器中完成授權後即可使用。
 
 ---
 
@@ -174,9 +185,9 @@ python main.py
 |------|------|
 | `/record [名稱]` | 開始錄製 🔴 — 背景記錄使用者在 SAP 中的操作 |
 | `/stop` | 停止錄製並儲存 SOP 檔案 |
-| `/recordings` | 列出所有已錄製的 SOP |
-| `/play [名稱]` | 顯示指定 SOP 的完整操作步驟 |
-| `/study [名稱]` | 在 Auto Mode 執行錄製 SOP，每個 SOP 步驟間隔 5 秒 |
+| `/recordings` | 列出所有 SOP / Skill（`skills/` 優先，其次 `recordings/`） |
+| `/play [名稱]` | 顯示指定 SOP / Skill 的完整操作步驟 |
+| `/study [名稱]` | 執行指定 SOP / Skill，自動步驟延遲 5 秒，人工步驟使用 Visualize 高亮引導 |
 
 Record Mode 使用 polling snapshot diff，不依賴不穩定的 SAP COM events。監控器會在背景 thread 內重新取得 SAP session，並偵測：
 
@@ -191,13 +202,28 @@ Record Mode 使用 polling snapshot diff，不依賴不穩定的 SAP COM events�
 - `raw_events`：原始 polling 事件，用於除錯
 - `events`：壓縮後 SOP 步驟，用於 `/play`、Ask Mode 參考與後續重放
 
-Study Mode 使用 `events` 進行語意重放：
+Study Mode 透過 `sap_skill_library.py` 讀取 `skills/` 與 `recordings/` 中的 JSON，並使用 `events` 作為互動式引導參考。若兩邊有同名項目，`skills/` 會優先，適合放置整理後的穩定教學流程。
+
+Study Mode 預設採互動式參考引導流程；錄製值與錄製畫面不是絕對準則，而是提示使用者理解流程的參考資料：
 
 - T-Code 切換會重放 OKCode + Enter，或直接使用 `set_tcode()`
+- 若目前已在目標 T-Code，T-Code / OKCode 參考步驟會自動略過
 - 若目前不在起始畫面，T-Code 會自動改成 `/nTCODE` 格式，例如 `VF05` → `/nVF05`
-- 一般欄位使用 `set_text()`，下拉式選單使用 `select_combo()`，radio/checkbox 會用 click/Select
+- 下拉式選單、radio/checkbox 等制式選取會由 agent 自動處理
+- 一般文字欄位會由 agent 先 focus/highlight 對應 SAP 欄位，再詢問本次要使用的值；高亮使用 `visualize_element()` / `Visualize(True)`
+- 欄位提示會從目前畫面 scan 的 `fields` 解析 SAP label / tooltip / name，優先顯示「付款人」「請款文件開始」這類畫面文字，並附上目前值、欄位型別、畫面名稱與元件 ID
+- 若 SAP 版面導致 label 沒配到，Study Mode 會再用座標尋找鄰近左側 label，最後才使用內建欄位字典或技術欄位名作 fallback
+- 錄製值只作為參考值；若目前 SAP 欄位已有值，直接 Enter 會使用目前值作為本次預設，輸入新值可覆寫，例如日期區間、付款人代號
+- 使用者在 SAP GUI 手動輸入後，agent 會讀回欄位值並確認是否符合本次值
+- 若驗證不符合，可選擇重試輸入、接受目前值、略過或中止
 - 畫面跳轉事件代表錄製時偵測到頁面變化；若沒有更細的按鈕事件，Study Mode 會先嘗試 F8/Execute，若該 vkey 未啟用則改送 Enter
-- 每個 SOP 步驟完成後固定等待 5 秒，方便觀察 SAP GUI 狀態與彈窗
+- 畫面跳轉送出後會掃描 SAP，確認 T-Code / screen 已到錄製目標；若仍停在原畫面、出現必填欄位彈窗或狀態列錯誤，會進入 retry/manual/skip/abort recovery
+- 若目前畫面已離開起點但與錄製目標 screen 不同，Study Mode 會進入互動式 review，由使用者決定接受目前狀態、重試、手動完成、略過或中止
+- Recovery 偵測到彈窗內有空白或必填欄位時，Enter / `g` 會啟動 guided popup recovery：逐欄高亮、提示填值、讀回驗證，最後送出彈窗並重新確認原 SOP 目標畫面
+- 自動步驟失敗時可選擇 retry、manual、skip 或 abort，不會直接卡死
+- 自動步驟完成後固定等待 5 秒；人工步驟由使用者按 Enter 控制節奏，不再額外等待
+
+`STUDY_ADAPTIVE_MODE=true` 是預設值，代表 SOP 是參考資料而不是絕對腳本。`STUDY_HUMAN_FIELD_INPUT=true` 目的是避免像 SE38 ABAP editor 這類 SAP GUI 特殊控制元件因格式不同而無法可靠讀寫。`STUDY_FOCUS_HUMAN_FIELDS=true` 會在提示前嘗試將游標移到欄位並高亮，`STUDY_VISUALIZE_SECONDS` 控制高亮停留秒數。`STUDY_PROMPT_FIELD_VALUES=true` 會把錄製值當成可覆寫的參考參數；`STUDY_AUTOFILL_PROMPTED_VALUES=false` 代表預設由使用者在 SAP GUI 手動輸入並由 agent 驗證。若要改回舊式全自動欄位重放，可將 human input 設為 `false`。
 
 停止錄製時會自動合併同一欄位的連續輸入，只保留最後值。例如 `C → C00 → C0001` 會壓縮成 `C0001`。
 
@@ -231,14 +257,18 @@ Scanner 會將 SAP 畫面整理成 LLM 容易判斷的摘要：
 - `messages`：彈窗中的錯誤/提示文字，例如「輸入一數值」
 - `fields`：將畫面 label 與可編輯欄位配對，例如 `標題 → wnd[1]/usr/txt...`
 - `dropdown=true`：標記 SAP `GuiComboBox` 下拉式選單，並盡量列出可選 `options`
-- `editors`：列出 ABAP/text editor 這類 `GuiShell` 控件，例如 `wnd[0]/usr/cntlEDITOR/shellcont/shell`
+- `editors`：列出 ABAP/text editor 這類 `GuiAbapEditor` / `GuiShell` 控件，例如 `wnd[0]/usr/cntlEDITOR/shellcont/shell`，並顯示可用的 editor API 能力
 - `focused_element`：目前焦點或紅框欄位（若 SAP GUI COM 可讀取）
 
 Auto Mode 每次工具執行後都會重新掃描並回傳 compact `screen_after`，避免畫面切換後仍使用舊的元件 ID。
 
 下拉式選單會使用 `select_combo()`，可依 option `key` 或顯示文字選取；`set_text()` 遇到 `GuiComboBox` 時也會自動改走下拉選取邏輯。
 
-ABAP 原始碼編輯器通常是 `GuiShell`，不能用一般 `.Text` 寫入。Auto Mode 會使用 `set_editor_text()`，優先嘗試 SAP editor 原生 API，失敗時再用剪貼簿貼上 fallback。
+ABAP 原始碼編輯器通常是 `GuiAbapEditor` / `GuiShell`，不能假設可用一般 `.Text` 讀寫。Auto Mode 讀取程式碼會使用 `read_editor_text()`，優先走 `GetLineText` / `GetUnprotectedTextPart`；寫入程式碼會使用 `set_editor_text()`，優先走 `SelectAll + ReplaceSelection`、`SetSelectionIndexes + ReplaceSelection`、`SetUnprotectedTextPart`、`InsertText`，最後才用剪貼簿 fallback。Study Mode 預設仍會將程式碼內容輸入交給使用者手動完成。
+
+Ask Mode 若偵測到目前畫面是 SE38/ABAP editor，會自動讀取 editor source 並放入 `editor_sources` context，因此可以直接詢問「這個程式是幹嘛的」。`EDITOR_CONTEXT_MAX_CHARS` 控制最多放入 LLM 的程式碼字元數。
+
+為避免 SAP GUI 將 ATC、Examples 等選單 `GuiShell` 誤判成程式碼 editor，`read_editor_text()` 會回傳 `looks_like_source`；Ask Mode 只會把看起來像 ABAP source 的內容交給 LLM，非 source 候選會以讀取失敗原因呈現。
 
 ---
 
@@ -247,14 +277,18 @@ ABAP 原始碼編輯器通常是 `GuiShell`，不能用一般 `.Text` 寫入。A
 ```
 SAP_Copilot/
 ├── main.py              # CLI 入口 (REPL 互動介面)
+├── start.py             # 啟動器：確認 SAP / Copilot 登入後啟動 main.py
+├── start.bat            # Windows 啟動批次檔
 ├── copilot_auth.py      # GitHub Copilot OAuth 認證
 ├── sap_core.py          # SAP GUI COM 連線管理
 ├── sap_agent_tools.py   # 畫面掃描 (Scanner) + 操作工具 (Actor)
 ├── llm_brain.py         # LLM Agent (ReAct Loop + Auto/Ask Mode)
 ├── sap_monitor.py       # 背景 Polling 監控器
 ├── sap_recorder.py      # SOP 錄製管理器
+├── sap_skill_library.py # Phase 3 SOP / Skill Library
 ├── sap_login.py         # SAP GUI 自動登入腳本
 ├── plan.md              # 開發計劃藍圖
+├── skills/              # 整理後的穩定教學 Skill (JSON)
 ├── recordings/          # SOP 錄製檔案 (JSON)
 └── .venv/               # Python 虛擬環境
 ```
@@ -315,7 +349,7 @@ COPILOT_RETRY_MAX_SECONDS=90
 
 - [x] **Phase 1** — 基礎建設與 Auto Mode 雛形 (CLI)
 - [x] **Phase 2** — 監控系統與 Record / Ask Mode
-- [ ] **Phase 3** — 視覺化引導與 Study Mode（`.Visualize(True)` 高亮 + 技能庫）
+- [x] **Phase 3** — 視覺化引導與 Study Mode（`.Visualize(True)` 高亮 + Skill Library + Guided Recovery）
 - [ ] **Phase 4** — UI 整合與最終封裝（PyQt6 / CustomTkinter 懸浮對話框）
 
 ---

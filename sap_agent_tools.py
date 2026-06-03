@@ -265,11 +265,84 @@ def _extract_combo_options(element, max_options=50):
 def _is_editor_like_info(type_name, elem_id="", name="", tooltip=""):
     haystack = f"{type_name} {elem_id} {name} {tooltip}".lower()
     return (
-        "editor" in haystack
+        "guiabapeditor" in haystack
+        or "guitextedit" in haystack
+        or "editor" in haystack
         or "textedit" in haystack
         or "txeditor" in haystack
         or ("guishell" in haystack and "shellcont/shell" in haystack)
     )
+
+
+def _is_never_editor_type(type_name):
+    return str(type_name) in {
+        "GuiButton",
+        "GuiCheckBox",
+        "GuiComboBox",
+        "GuiLabel",
+        "GuiMenu",
+        "GuiMenubar",
+        "GuiRadioButton",
+        "GuiStatusbar",
+        "GuiTextField",
+        "GuiToolbar",
+    }
+
+
+def _callable_member(element, name):
+    member = _safe_get_attr(element, name, None)
+    return member if callable(member) else None
+
+
+def _has_callable_member(element, *names):
+    return any(_callable_member(element, name) for name in names)
+
+
+def _detect_editor_capabilities(element):
+    """回傳 editor 控制元件可用的讀寫能力。"""
+    capability_names = (
+        "LineCount",
+        "GetLineText",
+        "InsertText",
+        "SelectAll",
+        "ReplaceSelection",
+        "SetSelectionIndexes",
+        "GetUnprotectedTextPart",
+        "SetUnprotectedTextPart",
+    )
+    capabilities = {}
+    for name in capability_names:
+        value = _safe_get_attr(element, name, None)
+        capabilities[name] = callable(value) or value is not None
+    return capabilities
+
+
+def _is_abap_editor_control(element, elem_id="", name="", tooltip=""):
+    type_name = _get_element_type_name(element)
+    if _is_never_editor_type(type_name):
+        return False
+
+    haystack = f"{type_name} {elem_id} {name} {tooltip}".lower()
+    if "guiabapeditor" in haystack or "guitextedit" in haystack:
+        return True
+
+    has_reader = _has_callable_member(
+        element,
+        "GetLineText",
+        "GetUnprotectedTextPart",
+    )
+    has_writer = _has_callable_member(
+        element,
+        "InsertText",
+        "ReplaceSelection",
+        "SetUnprotectedTextPart",
+    )
+    line_count = _line_count(element)
+
+    if _is_editor_like_info(type_name, elem_id, name, tooltip):
+        return has_reader or has_writer or line_count is not None
+
+    return bool(has_reader and (has_writer or line_count is not None))
 
 
 def _extract_element_info(element):
@@ -307,8 +380,9 @@ def _extract_element_info(element):
             "type": type_name,
         }
 
-        if _is_editor_like_info(type_name, elem_id, name, tooltip):
+        if _is_abap_editor_control(element, elem_id, name, tooltip):
             info["role"] = "editor"
+            info["editor_capabilities"] = _detect_editor_capabilities(element)
         if name:
             info["name"] = str(name)
         if text:
@@ -499,11 +573,14 @@ def _nearest_left_label(field, labels):
             continue
 
         row_gap = abs(label_top - field_top)
-        if row_gap > 2:
+        if row_gap > 8:
             continue
 
         horizontal_gap = abs(field_left - label_right)
-        score = row_gap * 100 + horizontal_gap
+        vertical_penalty = row_gap * 100
+        if label_top > field_top + 4:
+            vertical_penalty += 500
+        score = vertical_penalty + horizontal_gap
         if best_score is None or score < best_score:
             best = label
             best_score = score
@@ -574,13 +651,16 @@ def _extract_editors(elements):
     for elem in elements:
         if elem.get("role") != "editor":
             continue
-        editors.append({
+        editor = {
             "id": elem.get("id", ""),
             "type": elem.get("type", ""),
             "name": elem.get("name", ""),
             "tooltip": elem.get("tooltip", ""),
             "position": elem.get("position", {}),
-        })
+        }
+        if "editor_capabilities" in elem:
+            editor["editor_capabilities"] = elem["editor_capabilities"]
+        editors.append(editor)
     return editors
 
 
@@ -994,9 +1074,271 @@ def _focus_element(element):
     return False
 
 
+def visualize_element(session, element_id: str, duration_seconds: float = 1.2, set_focus: bool = True) -> dict:
+    """Focus and highlight a SAP GUI element for guided Study Mode."""
+    element_id = _normalize_element_id(session, element_id)
+    try:
+        element = session.FindById(element_id)
+        element_type = _get_element_type_name(element)
+
+        focused = False
+        focus_error = ""
+        if set_focus:
+            try:
+                focused = _focus_element(element)
+                if not focused:
+                    focus_error = "SetFocus is not available or failed"
+            except Exception as exc:
+                focus_error = str(exc)
+
+        caret_set = False
+        try:
+            text = str(_safe_get_attr(element, "Text", "") or "")
+            setattr(element, "caretPosition", len(text))
+            caret_set = True
+        except Exception:
+            try:
+                text = str(_safe_get_attr(element, "Text", "") or "")
+                setattr(element, "CaretPosition", len(text))
+                caret_set = True
+            except Exception:
+                pass
+
+        visualized = False
+        visualize_error = ""
+        try:
+            element.Visualize(True)
+            visualized = True
+            if duration_seconds and duration_seconds > 0:
+                time.sleep(float(duration_seconds))
+        except Exception as exc:
+            visualize_error = str(exc)
+
+        return {
+            "success": bool(focused or visualized),
+            "action": "visualize_element",
+            "element_id": element_id,
+            "element_type": element_type,
+            "focused": focused,
+            "caret_set": caret_set,
+            "visualized": visualized,
+            "focus_error": focus_error,
+            "visualize_error": visualize_error,
+            "error": "" if focused or visualized else (visualize_error or focus_error or "SAP does not support focus/highlight for this element"),
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "action": "visualize_element",
+            "element_id": element_id,
+            "error": f"定位或高亮失敗: {e}",
+        }
+
+
+def _line_count(element):
+    for attr in ("LineCount", "lineCount"):
+        value = _safe_get_attr(element, attr, None)
+        if value is not None:
+            try:
+                return int(value)
+            except Exception:
+                pass
+    for method_name in ("GetLineCount", "getLineCount"):
+        method = _callable_member(element, method_name)
+        if method:
+            try:
+                return int(method())
+            except Exception:
+                pass
+    return None
+
+
+def _read_abap_editor_native(element):
+    """使用 GuiAbapEditor / GuiTextedit API 讀取 editor 文字。"""
+    errors = []
+
+    get_unprotected = _callable_member(element, "GetUnprotectedTextPart")
+    if get_unprotected:
+        try:
+            parts = []
+            for index in range(10000):
+                try:
+                    part = get_unprotected(index)
+                except Exception:
+                    break
+                if part is None:
+                    break
+                parts.append(str(part))
+            if parts:
+                return "\n".join(parts), "GetUnprotectedTextPart"
+        except Exception as e:
+            errors.append(f"GetUnprotectedTextPart: {e}")
+
+    get_line_text = _callable_member(element, "GetLineText")
+    line_count = _line_count(element)
+    if get_line_text and line_count is not None:
+        for first_line in (0, 1):
+            try:
+                lines = []
+                for line_no in range(first_line, first_line + line_count):
+                    lines.append(str(get_line_text(line_no)))
+                return "\n".join(lines), f"GetLineText[{first_line}]"
+            except Exception as e:
+                errors.append(f"GetLineText[{first_line}]: {e}")
+
+    for attr in ("Text", "AccText"):
+        try:
+            value = _safe_get_attr(element, attr, None)
+            if value is not None and str(value) != "":
+                return str(value), attr
+        except Exception as e:
+            errors.append(f"{attr}: {e}")
+
+    raise RuntimeError("; ".join(errors) or "沒有可用的 editor 讀取方法")
+
+
+def _looks_like_abap_source(text):
+    text = str(text or "")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return False
+
+    upper_lines = [line.upper() for line in lines]
+    source_prefixes = (
+        "*",
+        '"',
+        "REPORT ",
+        "REPORT:",
+        "PROGRAM ",
+        "INCLUDE ",
+        "FUNCTION ",
+        "CLASS ",
+        "INTERFACE ",
+        "FORM ",
+        "MODULE ",
+        "METHOD ",
+        "DATA ",
+        "DATA:",
+        "TABLES ",
+        "PARAMETERS ",
+        "PARAMETERS:",
+        "SELECT-OPTIONS ",
+        "SELECT-OPTIONS:",
+        "START-OF-SELECTION",
+        "END-OF-SELECTION",
+        "INITIALIZATION",
+        "AT SELECTION-SCREEN",
+        "WRITE ",
+        "WRITE:",
+        "SELECT ",
+        "LOOP ",
+        "IF ",
+        "CASE ",
+        "CALL FUNCTION",
+        "CALL METHOD",
+        "CREATE OBJECT",
+        "TYPES ",
+        "TYPES:",
+        "CONSTANTS ",
+        "CONSTANTS:",
+    )
+    source_contains = (
+        " ENDCLASS ",
+        " ENDFORM ",
+        " ENDMETHOD ",
+        " ENDIF ",
+        " ENDLOOP ",
+        " FROM ",
+        " INTO ",
+        " WHERE ",
+    )
+
+    source_hits = 0
+    for line in upper_lines:
+        padded = f" {line} "
+        if any(line.startswith(prefix) for prefix in source_prefixes):
+            source_hits += 1
+        elif any(token in padded for token in source_contains):
+            source_hits += 1
+
+    lowered = "\n".join(lines).lower()
+    menu_patterns = (
+        "abap test cockpit",
+        "abap examples",
+        "with...",
+    )
+    if source_hits == 0 and any(pattern in lowered for pattern in menu_patterns):
+        return False
+
+    return source_hits > 0
+
+
+def _write_abap_editor_native(element, text):
+    """使用 GuiAbapEditor / GuiTextedit API 寫入 editor 文字。"""
+    errors = []
+    text = str(text)
+
+    try:
+        _focus_element(element)
+    except Exception:
+        pass
+
+    select_all = _callable_member(element, "SelectAll")
+    replace_selection = _callable_member(element, "ReplaceSelection")
+    if select_all and replace_selection:
+        try:
+            select_all()
+            replace_selection(text)
+            return "SelectAll+ReplaceSelection"
+        except Exception as e:
+            errors.append(f"SelectAll+ReplaceSelection: {e}")
+
+    set_selection = _callable_member(element, "SetSelectionIndexes")
+    if set_selection and replace_selection:
+        try:
+            current_text, _ = _read_abap_editor_native(element)
+            set_selection(0, len(current_text))
+            replace_selection(text)
+            return "SetSelectionIndexes+ReplaceSelection"
+        except Exception as e:
+            errors.append(f"SetSelectionIndexes+ReplaceSelection: {e}")
+
+    set_unprotected = _callable_member(element, "SetUnprotectedTextPart")
+    if set_unprotected:
+        try:
+            ok = set_unprotected(0, text)
+            if ok is False:
+                raise RuntimeError("SetUnprotectedTextPart returned False")
+            return "SetUnprotectedTextPart"
+        except Exception as e:
+            errors.append(f"SetUnprotectedTextPart: {e}")
+
+    insert_text = _callable_member(element, "InsertText")
+    if insert_text:
+        call_patterns = (
+            (text, 1, 1),
+            (text, 0, 0),
+            (text,),
+        )
+        for args in call_patterns:
+            try:
+                insert_text(*args)
+                return f"InsertText/{len(args)}args"
+            except Exception as e:
+                errors.append(f"InsertText{args}: {e}")
+
+    raise RuntimeError("; ".join(errors) or "沒有可用的 GuiAbapEditor 寫入方法")
+
+
 def _set_editor_text_native(element, text):
     """嘗試 SAP editor/shell 的原生文字 API。"""
     errors = []
+
+    if _is_abap_editor_control(element):
+        try:
+            return _write_abap_editor_native(element, text)
+        except Exception as e:
+            errors.append(f"GuiAbapEditor: {e}")
 
     try:
         element.Text = text
@@ -1079,6 +1421,20 @@ def set_editor_text(session, text: str, element_id: str = "") -> dict:
             method = _set_editor_text_clipboard(element, text)
 
         _wait_for_session_ready(session)
+        verify = {"available": False}
+        try:
+            read_text, read_method = _read_abap_editor_native(element)
+            verify = {
+                "available": True,
+                "success": read_text == str(text),
+                "read_method": read_method,
+                "read_length": len(read_text),
+            }
+            if not verify["success"]:
+                verify["message"] = "寫入後讀回內容與輸入文字不完全相同"
+        except Exception as e:
+            verify = {"available": False, "error": str(e)}
+
         return {
             "success": True,
             "action": "set_editor_text",
@@ -1087,6 +1443,7 @@ def set_editor_text(session, text: str, element_id: str = "") -> dict:
             "method": method,
             "native_error": native_error,
             "line_count": len(str(text).splitlines()),
+            "verify": verify,
             "status_bar": _read_status_bar(session),
         }
     except Exception as e:
@@ -1095,6 +1452,44 @@ def set_editor_text(session, text: str, element_id: str = "") -> dict:
             "action": "set_editor_text",
             "element_id": element_id,
             "error": f"寫入 editor 失敗: {e}",
+        }
+
+
+def read_editor_text(session, element_id: str = "") -> dict:
+    """讀取目前 SAP ABAP editor / text editor 內容。"""
+    try:
+        if not element_id:
+            element_id = _find_editor_id(session)
+        if not element_id:
+            return {
+                "success": False,
+                "action": "read_editor_text",
+                "error": "找不到 editor 控件。請先進入 SE38/ABAP 原始碼編輯器，或提供 element_id。",
+            }
+
+        element_id = _normalize_element_id(session, element_id)
+        element = session.FindById(element_id)
+        element_type = _get_element_type_name(element)
+        text, method = _read_abap_editor_native(element)
+        looks_like_source = _looks_like_abap_source(text)
+        return {
+            "success": True,
+            "action": "read_editor_text",
+            "element_id": element_id,
+            "element_type": element_type,
+            "method": method,
+            "text": text,
+            "line_count": len(text.splitlines()),
+            "char_count": len(text),
+            "looks_like_source": looks_like_source,
+            "warning": "" if looks_like_source else "read text does not look like ABAP source; it may be a menu or non-editor shell",
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "action": "read_editor_text",
+            "element_id": element_id,
+            "error": f"讀取 editor 失敗: {e}",
         }
 
 
@@ -1671,7 +2066,7 @@ TOOL_SCHEMAS = [
             "name": "set_editor_text",
             "description": (
                 "將多行文字寫入 SAP editor / GuiShell 控件，例如 ABAP 原始碼編輯器。"
-                "當 scan 結果出現 role=editor、editors，或元件 type=GuiShell 且是程式碼編輯器時，"
+                "當 scan 結果出現 role=editor、editors、editor_capabilities，或元件 type=GuiAbapEditor/GuiShell 且是程式碼編輯器時，"
                 "使用此工具，不要用 set_text。"
             ),
             "parameters": {
@@ -1687,6 +2082,53 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_editor_text",
+            "description": (
+                "讀取 SAP ABAP editor / text editor 內容。"
+                "當 scan 結果出現 role=editor、editors、editor_capabilities 或 GuiAbapEditor 時使用。"
+                "會優先使用 GetLineText / GetUnprotectedTextPart 等 editor API。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "element_id": {
+                        "type": "string",
+                        "description": "可選。editor 元件 ID。未提供時自動尋找目前畫面的 editor。",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "visualize_element",
+            "description": (
+                "將 SAP GUI 元件 focus 並使用 Visualize(True) 高亮，適合 Study Mode 或需要引導使用者看見欄位時使用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "element_id": {
+                        "type": "string",
+                        "description": "SAP 元件 ID，例如 'wnd[0]/usr/ctxtFACOM-KUNDE'。",
+                    },
+                    "duration_seconds": {
+                        "type": "number",
+                        "description": "可選。高亮後等待秒數，預設 1.2。",
+                    },
+                    "set_focus": {
+                        "type": "boolean",
+                        "description": "可選。是否先嘗試 SetFocus，預設 true。",
+                    },
+                },
+                "required": ["element_id"],
             },
         },
     },
@@ -1791,6 +2233,8 @@ TOOL_FUNCTIONS = {
     "set_text": set_text,
     "select_combo": select_combo,
     "set_editor_text": set_editor_text,
+    "read_editor_text": read_editor_text,
+    "visualize_element": visualize_element,
     "click": click,
     "send_vkey": send_vkey,
     "handle_popup": handle_popup,

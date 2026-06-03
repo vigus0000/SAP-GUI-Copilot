@@ -61,21 +61,25 @@
 ## 🗺️ 4. 開發階段藍圖 (Implementation Phases)
 
 ### 🏁 Phase 1: 基礎建設與 Auto Mode 雛形 (CLI 版本)
-* [ ] 建立 `sap_core.py`，實作安全的 SAP 連線獲取機制 (重用現有 Session)。
-* [ ] 實作 `scan_sap_screen()`，將 SAP 畫面轉換為結構化 JSON (保留 Type, Text, Tooltip, ID)。
-* [ ] 實作基礎 Tools：`set_text(id, value)`, `click(id)`, `send_vkey(key)`.
-* [ ] **目標驗證**：能在終端機輸入「幫我在目前畫面按下儲存」，程式能成功呼叫 AI 並執行。
+* [x] 建立 `sap_core.py`，實作安全的 SAP 連線獲取機制 (重用現有 Session)。
+* [x] 實作 `scan_sap_screen()`，將 SAP 畫面轉換為結構化 JSON (保留 Type, Text, Tooltip, ID)。
+* [x] 實作基礎 Tools：`set_text(id, value)`, `click(id)`, `send_vkey(key)`.
+* [x] **目標驗證**：各 mode 已完成實測，可進入 v0.4.0 / Phase 3。
 
 ### 🏁 Phase 2: 監控系統與 Record/Ask Mode
-* [ ] 建立 `sap_monitor.py`，實作 `pythoncom.PumpMessages()` 背景監聽。
-* [ ] 實作事件攔截：`OnChange`, `OnStartRequest`, `OnEndRequest`。
-* [ ] 將監聽到的 Log 寫入本地端 SQLite 或 JSON 檔案。
-* [ ] **目標驗證**：使用者在 SAP GUI 中隨意操作，Python 終端機能即時印出操作軌跡。
+* [x] 建立 `sap_monitor.py`，採用 polling snapshot diff 取代不穩定的 COM event。
+* [x] 實作 T-Code、screen、window、field、status message 變化偵測。
+* [x] 將監聽到的 Log 寫入本地 JSON 檔案。
+* [x] **目標驗證**：Record / Ask / Auto / Study mode 已完成實測。
 
-### 🏁 Phase 3: 視覺化引導與 Study Mode
-* [ ] 實作 `.Visualize(True)` 的高亮標示功能。
-* [ ] 建立「技能庫 (Skill Library)」讀取機制。
-* [ ] **目標驗證**：啟動教學模式，SAP 畫面上的特定欄位能依序閃爍並提示使用者輸入。
+### 🏁 Phase 3: 視覺化引導與 Study Mode (v0.4.1 完成)
+* [x] 實作 `.Visualize(True)` 的高亮標示功能，封裝為 `visualize_element()`。
+* [x] 建立「技能庫 (Skill Library)」讀取機制，支援 `skills/` 與 `recordings/`。
+* [x] Study Mode 畫面跳轉步驟加入動態驗證，避免 F8/Enter 送出成功但實際被彈窗或必填欄位擋住時誤判完成。
+* [x] 強化 Study Mode 的步驟提示與欄位說明，優先使用 scan `fields` 的 SAP label / tooltip / name，降低使用者只看到元件 ID 的情況。
+* [x] 針對 popup 補欄位流程建立 guided recovery，讓使用者能在必填彈窗中逐欄高亮、填值、驗證，並重新確認原 SOP 目標是否達成。
+* [x] Study Mode 改為互動式參考引導：錄製 SOP 只作為流程、欄位與參考值來源，不再作為絕對操作準則。
+* [x] **目標驗證**：啟動教學模式，SAP 畫面上的特定欄位能依序閃爍並提示使用者輸入。
 
 ### 🏁 Phase 4: UI 整合與最終封裝
 * [ ] 使用 PyQt6 / CustomTkinter 建立一個極簡的懸浮對話框。
