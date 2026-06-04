@@ -23,7 +23,15 @@ MAIN_SCRIPT = ROOT / "main.py"
 
 
 def _run_python(script: Path) -> int:
-    return subprocess.call([sys.executable, str(script)], cwd=str(ROOT))
+    process = subprocess.Popen([sys.executable, str(script)], cwd=str(ROOT))
+    while True:
+        try:
+            return process.wait()
+        except KeyboardInterrupt:
+            exit_code = process.poll()
+            if exit_code is not None:
+                return exit_code
+            print("[Start] 已收到中斷訊號，等待子程式處理...")
 
 
 def _sap_is_logged_in() -> bool:

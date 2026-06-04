@@ -13,7 +13,7 @@ SAP GUI Copilot 是一個以 Python 打造的 SAP GUI 智慧助手，透過 COM 
 | 🟣 **Auto Mode** | 用自然語言下指令，AI 自動操作 SAP 畫面（ReAct Loop：掃描 → 思考 → 執行 → 驗證） |
 | 🟢 **Ask Mode** | 結合當前畫面狀態的 Context-Aware 問答，回答「這格該填什麼」「為何報錯」 |
 | 🔴 **Record Mode** | 背景錄製使用者的 SAP 操作流程，自動產生 JSON 格式的 SOP 腳本 |
-| ▶ **Study Mode** | 使用 `/study [名稱]` 執行 SOP / Skill，透過 `Visualize(True)` 高亮欄位並引導使用者 |
+| ▶ **Study Mode** | 使用 `/study [名稱或目標]` 讀取 SOP / Skill；若尚未錄製，會即席教學並保存成新 skill |
 | 🪟 **Popup-aware Scanner** | 可解析 SAP 多層彈窗、錯誤訊息、焦點欄位、下拉選單、Editor，以及 label ↔ input 對應 |
 | 🔁 **畫面切換自癒** | 每次工具操作後重新掃描 SAP，避免沿用舊畫面元件 ID |
 | 🔒 **Human-in-the-loop** | 敏感操作（儲存、刪除、過帳）強制人工確認，杜絕 AI 寫入錯誤資料 |
@@ -187,7 +187,7 @@ start.bat
 | `/stop` | 停止錄製並儲存 SOP 檔案 |
 | `/recordings` | 列出所有 SOP / Skill（`skills/` 優先，其次 `recordings/`） |
 | `/play [名稱]` | 顯示指定 SOP / Skill 的完整操作步驟 |
-| `/study [名稱]` | 執行指定 SOP / Skill，自動步驟延遲 5 秒，人工步驟使用 Visualize 高亮引導 |
+| `/study [名稱或目標]` | 執行指定 SOP / Skill；若找不到同名 skill，會啟動即席教學並自動保存為新的 Markdown skill |
 
 Record Mode 使用 polling snapshot diff，不依賴不穩定的 SAP COM events。監控器會在背景 thread 內重新取得 SAP session，並偵測：
 
@@ -203,7 +203,11 @@ Record Mode 使用 polling snapshot diff，不依賴不穩定的 SAP COM events�
 - `raw_events`：原始 polling 事件，用於除錯
 - `events`：壓縮後 SOP 步驟，用於 `/play`、Ask Mode 參考與後續引導；系統預設值不會被壓成使用者輸入步驟
 
-Study Mode 透過 `sap_skill_library.py` 讀取 `skills/` 與 `recordings/` 中的 JSON，並使用 `events` 作為互動式引導參考。若兩邊有同名項目，`skills/` 會優先，適合放置整理後的穩定教學流程。
+Study Mode 透過 `sap_skill_library.py` 讀取 `skills/` 與 `recordings/` 中的 SOP，並以其內容作為互動式引導參考。若兩邊有同名項目，`skills/` 會優先，適合放置整理後的穩定教學流程。
+
+若 `/study [名稱或目標]` 找不到既有 SOP / Skill，系統會啟動即席 Study Mode：AI 教練會依目前 SAP 畫面與 SAP 常識推斷流程、逐步高亮引導使用者操作，完成後自動將本次教學紀錄成 `skills/[名稱].md`。下次使用同一個 `/study` 指令時，就會直接讀取該 skill 作為參考。
+
+Skill 自動保存會先清理自然語句，避免整句話直接變成檔名。例如 `/study 教我如何查詢物料` 會保存為 `skills/查詢物料.md`，同時保留原始查詢作為別名；之後輸入 `/study 查詢物料` 或 `/study 教我如何查詢物料` 都會命中同一份 skill。`/recordings` 也會依正規化名稱去重，避免同一流程重複顯示。
 
 Study Mode 預設採互動式參考引導流程；錄製值與錄製畫面不是絕對準則，而是提示使用者理解流程的參考資料：
 
@@ -217,6 +221,7 @@ Study Mode 預設採互動式參考引導流程；錄製值與錄製畫面不是
 - 錄製值只作為參考值；若目前 SAP 欄位已有值，直接 Enter 會使用目前值作為本次預設，輸入新值可覆寫，例如日期區間、付款人代號
 - AI 教練會優先檢查目前畫面 `fields[].value`；欄位已有值時，會引導確認沿用，而不是要求重新輸入 SOP 舊值
 - 使用者在 SAP GUI 手動輸入後，agent 會讀回欄位值並確認是否符合本次值
+- 若教練提示使用者選擇選項，`guide_user_action()` 會把輸入內容作為 `user_response` 回傳給 Study Mode；例如選擇「結束教學」會直接收斂並產生摘要，避免重複詢問
 - 若驗證不符合，可選擇重試輸入、接受目前值、略過或中止
 - 畫面跳轉事件代表錄製時偵測到頁面變化；若沒有更細的按鈕事件，Study Mode 會先嘗試 F8/Execute，若該 vkey 未啟用則改送 Enter
 - 畫面跳轉送出後會掃描 SAP，確認 T-Code / screen 已到錄製目標；若仍停在原畫面、出現必填欄位彈窗或狀態列錯誤，會進入 retry/manual/skip/abort recovery

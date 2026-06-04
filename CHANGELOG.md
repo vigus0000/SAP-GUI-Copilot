@@ -6,6 +6,39 @@
 
 ---
 
+## [0.6.2] - 2026-06-04
+
+#### Changed
+- **Skill 命名與查詢規則**
+  - `/study` 即席教學自動保存 skill 時，會將自然語句正規化為穩定名稱，例如 `教我如何查詢物料` → `查詢物料`。
+  - Skill 查詢支援原始使用者說法、正規化名稱、Markdown 標題與 `原始查詢` / `查詢別名` metadata。
+  - `/recordings` 清單會依正規化名稱去重，避免同一個流程同時顯示 `教我如何查詢物料` 與 `查詢物料`。
+
+#### Fixed
+- 移除自動保存造成的重複物料查詢 skill，保留 canonical 的 `查詢物料.md`。
+
+## [0.6.1] - 2026-06-04
+
+#### Fixed
+- **Study Mode 選項回覆卡住**
+  - `guide_user_action()` 現在會把使用者在提示中輸入的內容回傳為 `user_response`，避免使用者輸入 `4`、`完成` 等回覆後 LLM 看不到答案而重複詢問。
+  - Study prompt 明確要求模型處理 `user_response`，不能對同一元件連續提出語意相同的選項問題。
+  - Study ReAct 新增結束選項保護：若使用者選擇結束教學，會直接收斂並回傳 SOP 摘要，不再進入下一輪重複工具呼叫。
+
+## [0.6.0] - 2026-06-04
+
+#### Added
+- **Study Mode 即席教學**
+  - `/study [名稱或目標]` 找不到既有 SOP / Skill 時，不再中止；會改以目前 SAP 畫面與 SAP 常識啟動探索式教學。
+  - 即席 Study Mode 仍維持 Human-in-the-loop：只能高亮元件與顯示指引，不會替使用者寫入 SAP。
+  - 即席教學完成後會自動整理本次引導步驟，保存為 `skills/[名稱].md`，下次可直接用同名 `/study` 載入。
+- **Skill Library 寫入能力**
+  - 新增 `save_markdown_skill()`，支援將 AI 教學結果保存為 Markdown skill。
+
+#### Changed
+- Study prompt 現在明確支援「沒有 SOP」的教學情境，可依使用者目標、目前畫面與 SAP 常識推斷第一步。
+- CLI banner 更新為 `V0.6.0`。
+
 ## [0.5.1] - 2026-06-04
 
 #### Changed

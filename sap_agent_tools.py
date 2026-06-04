@@ -1193,19 +1193,32 @@ def guide_user_action(session, element_id: str, instruction: str) -> dict:
     if not viz_result.get("success"):
         print(f"\033[33m     ⚠ 無法高亮元件: {viz_result.get('error', '')}\033[0m")
 
-    # Step 3: 等待使用者確認
+    # Step 3: 等待使用者確認或輸入簡短回覆
     print()
-    user_response = input("\033[1;36m  ✅ 完成後按 Enter 繼續（或輸入 /skip 略過）> \033[0m").strip()
+    user_response = input("\033[1;36m  ✅ 完成後按 Enter 繼續；可輸入回覆內容；/skip 略過；/done 結束教學 > \033[0m").strip()
 
     skipped = user_response.lower() in ("/skip", "skip", "s")
+    finish_requested = user_response.lower() in (
+        "/done",
+        "/finish",
+        "/end",
+        "done",
+        "finish",
+        "end",
+        "完成",
+        "結束",
+        "我已學會",
+    )
 
     return {
         "success": True,
         "action": "guide_user_action",
         "element_id": element_id,
         "instruction": instruction,
+        "user_response": user_response,
         "user_confirmed": not skipped,
         "skipped": skipped,
+        "finish_requested": finish_requested,
         "visualize": viz_result,
         "current_value": current_value,
         "message": "使用者已略過此步驟" if skipped else "使用者已確認完成操作",
@@ -2292,7 +2305,8 @@ TOOL_SCHEMAS = [
             "name": "guide_user_action",
             "description": (
                 "引導使用者在 SAP GUI 上執行操作（Study Mode 專用）。"
-                "高亮指定元件，顯示操作指引文字，然後等待使用者確認完成。"
+                "高亮指定元件，顯示操作指引文字，然後等待使用者確認完成或輸入簡短回覆。"
+                "工具結果會包含 user_response；如果你詢問選項，下一輪必須依 user_response 處理。"
                 "此工具不會替使用者執行任何寫入操作，只用於指引。"
             ),
             "parameters": {

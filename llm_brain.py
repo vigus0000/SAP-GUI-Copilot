@@ -118,7 +118,7 @@ SYSTEM_PROMPT_ASK = """你是一個專業的 SAP GUI 問答助手。你**只回�
 """
 
 # System Prompt - Study Mode (Agentic 教練：只能引導，不能寫入)
-SYSTEM_PROMPT_STUDY = """你是一個 SAP GUI 操作教練。你的任務是根據提供的 SOP 指南，一步一步引導使用者完成 SAP 操作。
+SYSTEM_PROMPT_STUDY = """你是一個 SAP GUI 操作教練。你的任務是根據提供的 SOP 指南或使用者的學習目標，一步一步引導使用者完成 SAP 操作。
 
 ## 核心原則
 你**絕對不能**替使用者執行任何寫入操作。你唯一能做的是：
@@ -130,11 +130,18 @@ SYSTEM_PROMPT_STUDY = """你是一個 SAP GUI 操作教練。你的任務是根�
 - 這些工具會直接修改 SAP 畫面，你**絕對不能**呼叫它們
 
 ## 工作流程
-1. 閱讀提供的 SOP 指南和當前 SAP 畫面狀態
-2. 根據 SOP 的下一步，找到畫面上對應的元件 ID
+1. 閱讀提供的 SOP 指南、即席教學目標和當前 SAP 畫面狀態
+2. 根據 SOP 的下一步，或在沒有 SOP 時根據 SAP 常識與目前畫面推斷下一步，找到畫面上對應的元件 ID
 3. 使用 `guide_user_action(element_id, instruction)` 引導使用者
-4. 使用者確認完成後，觀察新的畫面狀態，繼續引導下一步
+4. 使用者確認完成後，工具結果會包含 `user_response`；如果它不是空字串，代表使用者在教學中輸入了明確回答，你必須依該回答決定下一步，不能重複詢問同一個問題
 5. 如果畫面狀態與 SOP 預期不同，分析原因並調整引導
+
+## 沒有既有 SOP 時
+- 如果 extra context 表明「目前沒有同名 SOP / skill」或「即席 Study 任務」，你仍然要教學，不要要求使用者先錄製 SOP
+- 先依使用者目標判斷最可能的 SAP 流程；例如「查詢物料」通常可先考慮 MM03 或系統中的物料查詢交易，但要依目前畫面與狀態列調整
+- 如果需要進入 T-Code，請用 `guide_user_action` 高亮 T-Code 欄位，指示使用者輸入交易代碼並按 Enter
+- 如果目標太模糊，先問一個最小必要問題；若已有合理預設流程，先提出建議並引導第一步
+- 完成教學時，回覆一段簡短、可重用的 SOP 摘要，方便系統保存成 skill 草稿
 
 ## SOP 與目前畫面的關係
 - SOP 是參考資料，不是絕對腳本；你必須優先依照目前 SAP 畫面狀態引導
@@ -148,6 +155,8 @@ SYSTEM_PROMPT_STUDY = """你是一個 SAP GUI 操作教練。你的任務是根�
 - 每次只引導一個步驟，等使用者確認完成後再繼續
 - instruction 要清楚說明：要操作什麼、填入什麼值、為什麼這樣做
 - 如果 SOP 中有具體值（如 T-Code、欄位值），在 instruction 中把它稱為「參考值」；目前畫面已有值時，優先提示確認目前值
+- 如果你用 `guide_user_action` 詢問選項，下一輪必須讀取工具結果的 `user_response` 並處理該選項；例如使用者回覆 `4` 且你的選項 4 是結束教學，就要停止呼叫工具並回覆 SOP 摘要
+- 不要連續對同一元件提出語意相同的選項問題；若使用者已回答，必須收斂或換下一步
 - 遇到彈窗或錯誤，先分析原因再引導使用者處理
 - 使用繁體中文
 
@@ -683,6 +692,50 @@ class SAPAgent:
 
         return "⚠️ 已達最大操作次數限制，請確認當前畫面狀態是否正確。"
 
+    def _study_tool_requested_finish(self, tool_name: str, tool_result: dict) -> bool:
+        """Detect explicit Study Mode finish responses before another LLM turn can loop."""
+        if tool_name != "guide_user_action":
+            return False
+        if tool_result.get("finish_requested"):
+            return True
+
+        user_response = str(tool_result.get("user_response", "") or "").strip().lower()
+        if not user_response:
+            return False
+
+        instruction = str(tool_result.get("instruction", "") or "")
+        finish_words = ("結束教學", "結束", "我已學會", "完成教學", "sop 摘要", "SOP 摘要")
+        if user_response == "4" and any(word in instruction for word in finish_words):
+            return True
+        return False
+
+    def _study_finish_summary(self, tool_result: dict) -> str:
+        """Return a deterministic Study Mode finish message to avoid repeated choice loops."""
+        screen = tool_result.get("screen_after") or tool_result.get("screen_summary") or {}
+        tcode = screen.get("tcode") or "N/A"
+        title = screen.get("title") or "N/A"
+        screen_number = screen.get("screen_number") or "N/A"
+        current_value = str(tool_result.get("current_value", "") or "").strip()
+
+        lines = [
+            "✅ Study Mode 已依你的選擇結束。",
+            "",
+            "## 本次教學摘要",
+            f"- 目前交易: {tcode}",
+            f"- 目前畫面: {title} / Screen {screen_number}",
+        ]
+        if current_value:
+            lines.append(f"- 目前聚焦欄位值: {current_value}")
+        lines.extend([
+            "",
+            "## 下次可重用的 SOP 草稿",
+            "1. 進入對應查詢交易或延續目前 SAP 畫面。",
+            "2. 依畫面提示輸入必要查詢條件，若欄位已有系統預設值則先確認是否沿用。",
+            "3. 進入查詢結果或主資料顯示畫面後，依需求查看對應頁籤或欄位。",
+            "4. 若已取得所需資訊，即可結束教學。",
+        ])
+        return "\n".join(lines)
+
     def _process_study(self, session, user_message: str, extra_context: str = "") -> str:
         """
         Study Mode: 使用 ReAct Loop 但只允許引導工具（guide_user_action, visualize_element）。
@@ -765,6 +818,9 @@ class SAPAgent:
                     "tool_call_id": tool_call_id,
                     "content": json.dumps(tool_result, ensure_ascii=False),
                 })
+
+                if self._study_tool_requested_finish(tool_name, tool_result):
+                    return self._study_finish_summary(tool_result)
 
         return "⚠️ 已達最大操作次數限制，Study Mode 結束。"
 

@@ -10,15 +10,17 @@ SAP GUI Copilot — CLI 入口 (Phase 4 — Agentic Coach)
 - /stop        → 停止錄製，AI 生成自然語言 SOP
 - /recordings  → 列出所有已錄製的 SOP
 - /play [名稱]  → 顯示指定 SOP 的操作步驟
-- /study [名稱] → AI 教練引導執行 SOP (Agentic Coach)
+- /study [名稱或目標] → AI 教練引導執行 SOP；找不到時即席教學並保存 skill
 - /ask         → 切換到 Ask Mode（問答模式）
 - /auto        → 切換回 Auto Mode（自動代操）
 - /quit        → 結束程式
 """
 
 import os
+import json
 import sys
 import time
+from datetime import datetime
 
 from copilot_auth import CopilotAuth
 from sap_core import SAPConnection
@@ -54,7 +56,7 @@ def print_banner():
     print(f"""
 {Colors.CYAN}╔══════════════════════════════════════════════════╗
 ║                                                  ║
-║   🤖 SAP GUI Copilot  V0.5.1  (Phase 4)         ║
+║   🤖 SAP GUI Copilot  V0.6.2  (Phase 4)         ║
 ║   ─────────────────────────────────────────────   ║
 ║   用自然語言操作 SAP，告別繁瑣的 T-Code！        ║
 ║                                                  ║
@@ -66,7 +68,7 @@ def print_banner():
     /stop          停止錄製
     /recordings    列出所有已錄製的 SOP
     /play [名稱]    顯示指定 SOP 的操作步驟
-    /study [名稱]   AI 教練引導執行 SOP
+    /study [名稱/目標] AI 教練引導；無 skill 時即席教學
     /ask           切換到 Ask Mode（問答模式）
     /auto          切換回 Auto Mode（自動代操）
     /login         重新執行 GitHub Copilot 授權
@@ -199,7 +201,7 @@ def print_recordings_list(skill_library):
         print()
 
     print(f"  {Colors.DIM}{'─' * 70}{Colors.RESET}")
-    print(f"  {Colors.DIM}使用 /play [名稱] 檢視步驟，或 /study [名稱] 延遲執行 SOP{Colors.RESET}\n")
+    print(f"  {Colors.DIM}使用 /play [名稱] 檢視步驟，或 /study [名稱/目標] 啟動教練引導{Colors.RESET}\n")
 
 
 def print_recording_steps(skill_library, name):
@@ -210,6 +212,109 @@ def print_recording_steps(skill_library, name):
     except FileNotFoundError:
         print(f"\n{Colors.RED}  找不到 SOP / skill: '{name}'{Colors.RESET}")
         print(f"{Colors.DIM}  使用 /recordings 查看所有可用項目{Colors.RESET}\n")
+
+
+def _screen_brief(screen_state):
+    """Build a compact screen summary for learned Study Mode skills."""
+    if not screen_state:
+        return "- 無法取得啟動時畫面狀態"
+
+    lines = [
+        f"- T-Code: {screen_state.get('tcode') or 'N/A'}",
+        f"- 畫面標題: {screen_state.get('title') or 'N/A'}",
+        f"- Screen: {screen_state.get('screen_number') or 'N/A'}",
+    ]
+    fields = screen_state.get("fields", [])[:12]
+    if fields:
+        lines.append("- 可見欄位:")
+        for field in fields:
+            label = field.get("label") or field.get("name") or field.get("tooltip") or field.get("id", "")
+            value = field.get("value", "")
+            value_text = f" = {value}" if value else ""
+            lines.append(f"  - {label}{value_text} ({field.get('id', '')})")
+    popup = screen_state.get("active_popup")
+    if popup:
+        lines.append(f"- 活動彈窗: {popup.get('title', '')} ({popup.get('id', '')})")
+    return "\n".join(lines)
+
+
+def build_ad_hoc_study_context(goal, screen_state):
+    """Create a Study Mode context when no recorded skill exists yet."""
+    return f"""# 即席 Study 任務: {goal}
+
+## 狀態
+目前沒有同名 SOP / skill。請把這次任務當成探索式教學，而不是既有錄製流程。
+
+## 教學目標
+{goal}
+
+## 目前 SAP 畫面摘要
+{_screen_brief(screen_state)}
+
+## 教練要求
+- 依照目前 SAP 畫面與 SAP 常識判斷下一步。
+- 如果需要 T-Code，請先引導使用者在 T-Code 欄位輸入最可能的交易代碼；例如查詢物料通常可能是 MM03 或相關查詢交易，但仍要依畫面狀態修正。
+- 每次只引導一個步驟，優先使用 `guide_user_action` 高亮欄位或按鈕。
+- 不要替使用者寫入資料；由使用者在 SAP GUI 操作後確認。
+- 若資訊不足，先提出最小必要問題或引導使用者確認目前畫面。
+- 完成本次教學後，請輸出一段可被下次 `/study` 重用的簡短 SOP 摘要。
+"""
+
+
+def extract_study_guidance_steps(agent):
+    """Extract guide_user_action tool calls from the latest Study Mode session."""
+    steps = []
+    for message in getattr(agent, "conversation_history", []):
+        if message.get("role") != "assistant":
+            continue
+        for tool_call in message.get("tool_calls", []) or []:
+            func = tool_call.get("function", {})
+            if func.get("name") != "guide_user_action":
+                continue
+            try:
+                args = json.loads(func.get("arguments", "{}"))
+            except Exception:
+                args = {}
+            instruction = str(args.get("instruction", "")).strip()
+            element_id = str(args.get("element_id", "")).strip()
+            if instruction:
+                suffix = f"（元件 ID: `{element_id}`）" if element_id else ""
+                steps.append(f"{len(steps) + 1}. {instruction}{suffix}")
+    return steps
+
+
+def build_learned_skill_markdown(name, response, guidance_steps, initial_screen):
+    """Persist an ad-hoc Study Mode session as a reusable Markdown skill."""
+    lines = [
+        f"# SOP: {name}",
+        "",
+        "## 目的",
+        f"引導使用者完成「{name}」。此 skill 由 `/study` 在沒有既有 SOP 時自動建立，屬於可持續修正的教學草稿。",
+        "",
+        "## 初始畫面參考",
+        _screen_brief(initial_screen),
+        "",
+        "## 操作步驟",
+    ]
+
+    if guidance_steps:
+        lines.extend(guidance_steps)
+    else:
+        lines.append("1. 依目前 SAP 畫面狀態，由 Study Mode 教練判斷下一步並高亮提示使用者操作。")
+
+    lines.extend([
+        "",
+        "## 教練輸出摘要",
+        response.strip() if response else "本次教學未產生最終文字摘要。",
+        "",
+        "## 使用原則",
+        "- 本 skill 是參考資料，不是絕對腳本；Study Mode 應優先依照目前 SAP 畫面狀態引導。",
+        "- 若欄位已有目前值，先請使用者確認是否沿用，不要要求重打舊值。",
+        "- 若畫面、T-Code 或欄位與本草稿不同，請依目前畫面調整教學步驟。",
+        "",
+        f"建立時間: {datetime.now().isoformat(timespec='seconds')}",
+    ])
+    return "\n".join(lines)
 
 
 
@@ -414,7 +519,7 @@ def main():
                 sop_name = parts[1].strip()
                 print_recording_steps(skill_library, sop_name)
 
-            # --- /study [名稱] ---
+            # --- /study [名稱或目標] ---
             elif cmd == "/study" or cmd.startswith("/study "):
                 if recorder.is_recording:
                     print(f"{Colors.YELLOW}  請先 /stop 結束錄製，再執行 /study{Colors.RESET}")
@@ -422,39 +527,73 @@ def main():
 
                 parts = user_input.split(maxsplit=1)
                 if len(parts) < 2 or not parts[1].strip():
-                    print(f"{Colors.YELLOW}  用法: /study [SOP名稱]{Colors.RESET}")
+                    print(f"{Colors.YELLOW}  用法: /study [SOP名稱或教學目標]{Colors.RESET}")
                     print(f"{Colors.DIM}  使用 /recordings 查看所有錄製{Colors.RESET}")
                     continue
 
                 sop_name = parts[1].strip()
+                canonical_sop_name = skill_library.canonical_skill_name(sop_name)
 
                 # 讀取 SOP（優先 .md，退回 .json）
+                skill_found = True
+                initial_screen = None
                 try:
                     skill_data = skill_library.load_skill(sop_name)
                 except FileNotFoundError:
-                    print(f"\n{Colors.RED}  找不到 SOP / skill: '{sop_name}'{Colors.RESET}")
-                    print(f"{Colors.DIM}  使用 /recordings 查看所有可用項目{Colors.RESET}\n")
-                    continue
+                    skill_found = False
+                    skill_data = {}
+                    print(f"\n{Colors.YELLOW}  找不到 SOP / skill: '{sop_name}'{Colors.RESET}")
+                    print(f"{Colors.DIM}  將啟動即席 Study Mode，依目前 SAP 畫面與 SAP 常識教學，完成後自動記錄為 skill。{Colors.RESET}\n")
+                    if canonical_sop_name != sop_name:
+                        print(f"{Colors.DIM}  保存名稱將正規化為: {canonical_sop_name}{Colors.RESET}\n")
+                    try:
+                        session = sap.get_session()
+                        initial_screen = scan_sap_screen(session)
+                    except Exception:
+                        initial_screen = None
 
                 # 取得 SOP 文字內容
-                if skill_data.get("format") == "markdown" and skill_data.get("sop_text"):
+                if not skill_found:
+                    sop_text = build_ad_hoc_study_context(sop_name, initial_screen)
+                    study_request = (
+                        f"目前沒有既有 SOP。請以「{sop_name}」為學習目標，"
+                        "根據目前 SAP 畫面與 SAP 常識，用互動式教練方式引導我完成操作。"
+                    )
+                elif skill_data.get("format") == "markdown" and skill_data.get("sop_text"):
                     sop_text = skill_data["sop_text"]
+                    study_request = "請根據以下 SOP 指南，從第一步開始引導我完成操作。"
                 else:
                     sop_text = skill_library.get_skill_summary(sop_name)
+                    study_request = "請根據以下 SOP 指南，從第一步開始引導我完成操作。"
 
                 print(f"\n{Colors.CYAN}📘 Study Mode: {sop_name}{Colors.RESET}")
-                print(f"{Colors.DIM}  AI 教練將根據 SOP 一步步引導你操作 SAP{Colors.RESET}\n")
+                if skill_found:
+                    print(f"{Colors.DIM}  AI 教練將根據 SOP 一步步引導你操作 SAP{Colors.RESET}\n")
+                else:
+                    print(f"{Colors.DIM}  AI 教練將先探索教學；本次引導會保存為新的 skill 草稿{Colors.RESET}\n")
 
                 # 切換到 Study Mode 並啟動 ReAct Loop
                 agent.set_mode("study")
+                response = ""
                 try:
                     session = sap.get_session()
                     response = agent.process_message(
                         session,
-                        f"請根據以下 SOP 指南，從第一步開始引導我完成操作。",
+                        study_request,
                         extra_context=sop_text,
                     )
                     print(f"\n{Colors.MAGENTA}  AI > {Colors.RESET}{response}\n")
+                    if not skill_found:
+                        guidance_steps = extract_study_guidance_steps(agent)
+                        learned_markdown = build_learned_skill_markdown(
+                            canonical_sop_name,
+                            response,
+                            guidance_steps,
+                            initial_screen,
+                        )
+                        saved_path = skill_library.save_markdown_skill(sop_name, learned_markdown)
+                        print(f"{Colors.GREEN}  ✅ 已將本次即席教學記錄為 skill: {saved_path}{Colors.RESET}")
+                        print(f"{Colors.DIM}     下次可直接使用 /study {canonical_sop_name}，或沿用原本說法 /study {sop_name}{Colors.RESET}\n")
                 except ConnectionError as e:
                     print(f"{Colors.RED}  SAP 連線已斷開: {e}{Colors.RESET}")
                 except Exception as e:

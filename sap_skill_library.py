@@ -7,6 +7,8 @@ It can read curated skills from ./skills and existing recordings from ./recordin
 
 import json
 import os
+import re
+from datetime import datetime
 
 from sap_recorder import RECORDINGS_DIR, SAPRecorder
 
@@ -17,6 +19,36 @@ SKILLS_DIR = os.path.join(ROOT_DIR, "skills")
 
 class SAPSkillLibrary:
     """Read SOP skills from curated skill files and recorded SOP files."""
+
+    QUERY_PREFIXES = (
+        "/study",
+        "請教我如何",
+        "請教我怎麼",
+        "請教我",
+        "教我如何",
+        "教我怎麼",
+        "教我",
+        "幫我如何",
+        "幫我怎麼",
+        "幫我",
+        "我要學",
+        "我想學",
+        "如何",
+        "怎麼",
+        "怎樣",
+        "請問",
+        "請",
+    )
+
+    QUERY_SUFFIXES = (
+        "的教學",
+        "教學",
+        "流程",
+        "操作",
+        "怎麼做",
+        "怎麼用",
+        "怎麼查",
+    )
 
     def __init__(self, skill_dirs=None):
         self.skill_dirs = skill_dirs or [
@@ -32,7 +64,7 @@ class SAPSkillLibrary:
         for source_type, directory in self.skill_dirs:
             if not os.path.exists(directory):
                 continue
-            for filename in sorted(os.listdir(directory)):
+            for filename in self._sorted_skill_files(directory):
                 is_json = filename.endswith(".json")
                 is_md = filename.endswith(".md")
                 if not is_json and not is_md:
@@ -43,7 +75,7 @@ class SAPSkillLibrary:
                 except (json.JSONDecodeError, OSError, ValueError):
                     continue
                 name = data.get("name") or os.path.splitext(filename)[0]
-                key = name.strip().lower()
+                key = self._lookup_key(name)
                 if key in seen:
                     continue
                 seen.add(key)
@@ -71,6 +103,32 @@ class SAPSkillLibrary:
         data = self.load_skill(name)
         return self._format_summary(data)
 
+    def save_markdown_skill(self, name: str, markdown_text: str) -> str:
+        """Save a Markdown skill into the primary skills directory."""
+        canonical_name = self.canonical_skill_name(name)
+        safe_name = self._safe_name(canonical_name)
+        skills_dir = self.skill_dirs[0][1]
+        os.makedirs(skills_dir, exist_ok=True)
+
+        path = os.path.join(skills_dir, f"{safe_name}.md")
+        content = markdown_text.strip()
+        if not content.startswith("#"):
+            content = f"# SOP: {canonical_name}\n\n{content}"
+        else:
+            content = self._replace_markdown_title(content, canonical_name)
+
+        metadata = (
+            f"\n\n---\n"
+            f"自動建立時間: {datetime.now().isoformat(timespec='seconds')}\n"
+            f"來源: /study 即席教學\n"
+        )
+        if canonical_name != name:
+            metadata += f"原始查詢: {name}\n"
+            metadata += f"查詢別名: {name}\n"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content + metadata)
+        return path
+
     # Compatibility with existing CLI naming.
     def list_recordings(self) -> list:
         return self.list_skills()
@@ -82,38 +140,42 @@ class SAPSkillLibrary:
         return self.get_skill_summary(name)
 
     def _find_skill_path(self, directory, name):
-        safe_name = self._safe_name(name)
-        candidates = [
-            os.path.join(directory, f"{name}.md"),
-            os.path.join(directory, f"{safe_name}.md"),
-            os.path.join(directory, f"{name}.json"),
-            os.path.join(directory, f"{safe_name}.json"),
-        ]
+        candidate_names = self._lookup_variants(name)
+        candidates = []
+        for candidate_name in candidate_names:
+            safe_name = self._safe_name(candidate_name)
+            candidates.extend([
+                os.path.join(directory, f"{candidate_name}.md"),
+                os.path.join(directory, f"{safe_name}.md"),
+                os.path.join(directory, f"{candidate_name}.json"),
+                os.path.join(directory, f"{safe_name}.json"),
+            ])
         for path in candidates:
             if os.path.exists(path):
                 return path
 
-        target = name.strip().lower()
+        target_keys = {self._lookup_key(item) for item in candidate_names if item}
         if not os.path.exists(directory):
             return ""
-        for filename in os.listdir(directory):
+        fuzzy_candidates = []
+        for filename in self._sorted_skill_files(directory):
             is_json = filename.endswith(".json")
             is_md = filename.endswith(".md")
             if not is_json and not is_md:
                 continue
             path = os.path.join(directory, filename)
-            base_name = os.path.splitext(filename)[0].strip().lower()
-            if base_name == target:
+            names = self._candidate_names_for_path(path, is_json)
+            keys = {self._lookup_key(item) for item in names if item}
+            if keys & target_keys:
                 return path
-            if is_json:
-                try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    data_name = str(data.get("name") or base_name).strip().lower()
-                except (json.JSONDecodeError, OSError):
-                    continue
-                if data_name == target:
-                    return path
+            for target_key in target_keys:
+                for key in keys:
+                    if target_key and key and (target_key in key or key in target_key):
+                        fuzzy_candidates.append((len(key), path))
+                        break
+        if fuzzy_candidates:
+            fuzzy_candidates.sort(reverse=True)
+            return fuzzy_candidates[0][1]
         return ""
 
     def _load_path(self, path, source_type):
@@ -224,3 +286,109 @@ class SAPSkillLibrary:
     def _safe_name(name: str) -> str:
         safe_name = "".join(c for c in name if c.isalnum() or c in (" ", "_", "-", ".", "（", "）"))
         return safe_name.strip() or "unnamed"
+
+    @classmethod
+    def canonical_skill_name(cls, name: str) -> str:
+        """Turn a natural-language /study query into a stable skill name."""
+        original = str(name or "").strip()
+        text = re.sub(r"\s+", "", original)
+        text = text.strip(" ：:，,。.!！?？、")
+
+        changed = True
+        while changed:
+            changed = False
+            for prefix in cls.QUERY_PREFIXES:
+                if text.lower().startswith(prefix.lower()) and len(text) > len(prefix):
+                    text = text[len(prefix):].strip(" ：:，,。.!！?？、")
+                    changed = True
+                    break
+
+        changed = True
+        while changed:
+            changed = False
+            for suffix in cls.QUERY_SUFFIXES:
+                if text.endswith(suffix) and len(text) > len(suffix):
+                    text = text[:-len(suffix)].strip(" ：:，,。.!！?？、")
+                    changed = True
+                    break
+
+        return text or original or "unnamed"
+
+    @classmethod
+    def _lookup_key(cls, name: str) -> str:
+        canonical = cls.canonical_skill_name(name)
+        return "".join(ch.lower() for ch in canonical if ch.isalnum())
+
+    @classmethod
+    def _lookup_variants(cls, name: str) -> list:
+        variants = []
+        canonical = cls.canonical_skill_name(name)
+        for value in (canonical, name, cls._safe_name(canonical), cls._safe_name(name)):
+            value = str(value or "").strip()
+            if value and value not in variants:
+                variants.append(value)
+        return variants
+
+    @classmethod
+    def _sorted_skill_files(cls, directory):
+        filenames = [
+            filename for filename in os.listdir(directory)
+            if filename.endswith(".json") or filename.endswith(".md")
+        ]
+
+        def sort_key(filename):
+            stem = os.path.splitext(filename)[0]
+            canonical = cls.canonical_skill_name(stem)
+            is_canonical = stem == canonical
+            return (0 if is_canonical else 1, canonical, stem)
+
+        return sorted(filenames, key=sort_key)
+
+    @classmethod
+    def _candidate_names_for_path(cls, path, is_json):
+        base_name = os.path.splitext(os.path.basename(path))[0]
+        names = [base_name, cls.canonical_skill_name(base_name)]
+        try:
+            if is_json:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    names.append(str(data.get("name") or ""))
+                    aliases = data.get("aliases") or data.get("alias") or []
+                    if isinstance(aliases, str):
+                        aliases = [aliases]
+                    names.extend(str(item) for item in aliases)
+            else:
+                with open(path, "r", encoding="utf-8") as f:
+                    for _ in range(80):
+                        line = f.readline()
+                        if not line:
+                            break
+                        stripped = line.strip()
+                        if stripped.startswith("#"):
+                            names.append(cls._clean_markdown_title(stripped))
+                        elif stripped.startswith(("原始查詢:", "查詢別名:", "Aliases:", "Alias:")):
+                            _, value = stripped.split(":", 1)
+                            names.extend(item.strip() for item in value.split(","))
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+        return [item for item in names if item]
+
+    @staticmethod
+    def _clean_markdown_title(line: str) -> str:
+        title = line.lstrip("#").strip()
+        for prefix in ("SOP:", "SOP：", "Skill:", "Skill："):
+            if title.startswith(prefix):
+                return title[len(prefix):].strip()
+        return title
+
+    @classmethod
+    def _replace_markdown_title(cls, content: str, canonical_name: str) -> str:
+        lines = content.splitlines()
+        if not lines:
+            return f"# SOP: {canonical_name}"
+        for idx, line in enumerate(lines):
+            if line.startswith("#"):
+                lines[idx] = f"# SOP: {canonical_name}"
+                return "\n".join(lines)
+        return f"# SOP: {canonical_name}\n\n{content}"
