@@ -34,6 +34,10 @@ from sap_agent_tools import (
     confirmed_handle_popup,
 )
 
+# Study Mode 只允許使用的工具名稱
+STUDY_ALLOWED_TOOLS = {"guide_user_action", "visualize_element"}
+STUDY_TOOL_SCHEMAS = [s for s in TOOL_SCHEMAS if s.get("function", {}).get("name") in STUDY_ALLOWED_TOOLS]
+
 # GitHub Copilot Chat Completions API
 COPILOT_CHAT_URL = "https://api.githubcopilot.com/chat/completions"
 
@@ -113,6 +117,46 @@ SYSTEM_PROMPT_ASK = """你是一個專業的 SAP GUI 問答助手。你**只回�
 - 常見欄位: VBELN=單號, MATNR=物料, BUKRS=公司代碼, WERKS=工廠
 """
 
+# System Prompt - Study Mode (Agentic 教練：只能引導，不能寫入)
+SYSTEM_PROMPT_STUDY = """你是一個 SAP GUI 操作教練。你的任務是根據提供的 SOP 指南，一步一步引導使用者完成 SAP 操作。
+
+## 核心原則
+你**絕對不能**替使用者執行任何寫入操作。你唯一能做的是：
+1. 使用 `guide_user_action` 工具高亮 SAP 元件並顯示操作指引，等待使用者確認完成
+2. 使用 `visualize_element` 工具高亮元件讓使用者知道要操作的位置
+
+## 嚴格禁止使用的工具
+- set_text、select_combo、set_editor_text、click、send_vkey、set_tcode、handle_popup
+- 這些工具會直接修改 SAP 畫面，你**絕對不能**呼叫它們
+
+## 工作流程
+1. 閱讀提供的 SOP 指南和當前 SAP 畫面狀態
+2. 根據 SOP 的下一步，找到畫面上對應的元件 ID
+3. 使用 `guide_user_action(element_id, instruction)` 引導使用者
+4. 使用者確認完成後，觀察新的畫面狀態，繼續引導下一步
+5. 如果畫面狀態與 SOP 預期不同，分析原因並調整引導
+
+## SOP 與目前畫面的關係
+- SOP 是參考資料，不是絕對腳本；你必須優先依照目前 SAP 畫面狀態引導
+- 在引導任何欄位輸入前，先檢查目前畫面 JSON 的 `fields` / `active_popup.fields`
+- 如果目標欄位已經有非空 `value`，不要要求使用者重新輸入 SOP 中的舊值；請引導使用者「確認沿用目前值」，只有在目前值不符合本次需求時才請使用者修改
+- 如果 SOP 或事件中出現 FIELD_DEFAULT / system_default，代表 SAP 畫面跳轉後自動帶出的預設值，通常不需要使用者輸入
+- 如果 SOP 值與目前畫面值不同，明確說明「SOP 參考值是 X，目前值是 Y」，並讓使用者決定是否沿用目前值或改成其他值
+- 日期、組織、客戶、付款人等欄位常會有系統預設值；不要把這些預設值當成必須重打的步驟
+
+## 引導風格
+- 每次只引導一個步驟，等使用者確認完成後再繼續
+- instruction 要清楚說明：要操作什麼、填入什麼值、為什麼這樣做
+- 如果 SOP 中有具體值（如 T-Code、欄位值），在 instruction 中把它稱為「參考值」；目前畫面已有值時，優先提示確認目前值
+- 遇到彈窗或錯誤，先分析原因再引導使用者處理
+- 使用繁體中文
+
+## SAP 基礎知識
+- T-Code 欄位 ID 通常是 wnd[0]/tbar[0]/okcd
+- VKey 0=Enter, 3=F3(返回), 8=F8(執行), 11=Ctrl+S(儲存), 12=F12(取消)
+- wnd[0] 是主視窗，wnd[1] 是彈出視窗
+"""
+
 
 class SAPAgent:
     """
@@ -146,18 +190,18 @@ class SAPAgent:
         切換 Agent 模式。
 
         Args:
-            mode: 'auto' 或 'ask'
+            mode: 'auto', 'ask' 或 'study'
         """
-        if mode not in ("auto", "ask"):
-            raise ValueError(f"不支援的模式: {mode}，請使用 'auto' 或 'ask'")
+        if mode not in ("auto", "ask", "study"):
+            raise ValueError(f"不支援的模式: {mode}，請使用 'auto', 'ask' 或 'study'")
 
         self._mode = mode
-        prompt = SYSTEM_PROMPT_AUTO if mode == "auto" else SYSTEM_PROMPT_ASK
+        prompt = {"auto": SYSTEM_PROMPT_AUTO, "ask": SYSTEM_PROMPT_ASK, "study": SYSTEM_PROMPT_STUDY}[mode]
         self.conversation_history = [
             {"role": "system", "content": prompt}
         ]
-        mode_name = "🟣 Auto Mode（自動代操）" if mode == "auto" else "🟢 Ask Mode（問答模式）"
-        print(f"\033[90m[Agent] 已切換至 {mode_name}\033[0m")
+        mode_names = {"auto": "🟣 Auto Mode（自動代操）", "ask": "🟢 Ask Mode（問答模式）", "study": "📘 Study Mode（教練引導）"}
+        print(f"\033[90m[Agent] 已切換至 {mode_names[mode]}\033[0m")
 
     def _call_copilot_api(self, messages, tools=None):
         """
@@ -480,6 +524,7 @@ class SAPAgent:
         根據當前模式決定行為：
         - Auto Mode: 執行 ReAct Loop（可呼叫工具操作 SAP）
         - Ask Mode: 僅回答問題（不呼叫工具）
+        - Study Mode: 執行 ReAct Loop 但只能用引導工具
 
         Args:
             session: SAP Session COM 物件
@@ -491,6 +536,8 @@ class SAPAgent:
         """
         if self._mode == "ask":
             return self._process_ask(session, user_message, extra_context)
+        elif self._mode == "study":
+            return self._process_study(session, user_message, extra_context)
         else:
             return self._process_auto(session, user_message)
 
@@ -636,9 +683,94 @@ class SAPAgent:
 
         return "⚠️ 已達最大操作次數限制，請確認當前畫面狀態是否正確。"
 
+    def _process_study(self, session, user_message: str, extra_context: str = "") -> str:
+        """
+        Study Mode: 使用 ReAct Loop 但只允許引導工具（guide_user_action, visualize_element）。
+        """
+        print("\033[90m[Agent] 正在掃描 SAP 畫面...\033[0m")
+        screen_state = scan_sap_screen(session)
+        screen_json = json.dumps(self._screen_context(screen_state), ensure_ascii=False, indent=2)
+
+        combined_parts = [
+            f"## 當前 SAP 畫面狀態\n```json\n{screen_json}\n```",
+        ]
+        if extra_context:
+            combined_parts.append(f"\n## SOP 操作指南\n{extra_context}")
+        combined_parts.append(f"\n## 使用者指令\n{user_message}")
+        combined_message = "\n".join(combined_parts)
+
+        self._trim_conversation_history()
+        self.conversation_history.append({"role": "user", "content": combined_message})
+
+        for iteration in range(MAX_ITERATIONS):
+            print(f"\033[90m[Agent] Study ReAct 迭代 {iteration + 1}/{MAX_ITERATIONS}\033[0m")
+
+            try:
+                response = self._call_copilot_api(
+                    messages=self.conversation_history,
+                    tools=STUDY_TOOL_SCHEMAS,
+                )
+            except RuntimeError as e:
+                error_msg = f"LLM 呼叫失敗: {e}"
+                print(f"\033[31m[Agent] {error_msg}\033[0m")
+                return error_msg
+
+            choices = response.get("choices", [])
+            if not choices:
+                error_info = response.get("error", {})
+                if error_info:
+                    return f"Copilot API 錯誤: {error_info.get('message', json.dumps(error_info, ensure_ascii=False))}"
+                return "Copilot API 回應異常（無 choices），請稍後重試。"
+
+            choice = choices[0]
+            message = choice.get("message", {})
+            finish_reason = choice.get("finish_reason", "")
+
+            if not message:
+                return "Copilot API 回應格式異常（空 message）"
+
+            self.conversation_history.append(message)
+
+            if finish_reason == "stop" or not message.get("tool_calls"):
+                final_text = message.get("content", "")
+                return final_text or "(AI 未回傳任何訊息)"
+
+            tool_calls = message.get("tool_calls", [])
+            for tool_call in tool_calls:
+                func = tool_call.get("function", {})
+                tool_name = func.get("name", "")
+                tool_call_id = tool_call.get("id", "")
+
+                try:
+                    tool_args = json.loads(func.get("arguments", "{}"))
+                except json.JSONDecodeError:
+                    tool_args = {}
+
+                # Study Mode 安全檢查：只允許引導工具
+                if tool_name not in STUDY_ALLOWED_TOOLS:
+                    print(f"\033[33m[Agent] Study Mode 攔截了禁用工具: {tool_name}\033[0m")
+                    tool_result = {
+                        "success": False,
+                        "error": f"Study Mode 禁止使用 {tool_name}。你只能使用 guide_user_action 和 visualize_element。",
+                    }
+                else:
+                    print(f"\033[36m[Agent] 呼叫工具: {tool_name}({tool_args})\033[0m")
+                    tool_result = self._execute_tool_call(session, tool_name, tool_args)
+
+                tool_result = self._attach_screen_after_tool(session, tool_result)
+                print(f"\033[90m[Agent] 工具結果: {json.dumps({k: v for k, v in tool_result.items() if k != 'screen_after'}, ensure_ascii=False)}\033[0m")
+
+                self.conversation_history.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": json.dumps(tool_result, ensure_ascii=False),
+                })
+
+        return "⚠️ 已達最大操作次數限制，Study Mode 結束。"
+
     def reset_conversation(self):
         """重置對話歷史（保持當前模式）"""
-        prompt = SYSTEM_PROMPT_AUTO if self._mode == "auto" else SYSTEM_PROMPT_ASK
+        prompt = {"auto": SYSTEM_PROMPT_AUTO, "ask": SYSTEM_PROMPT_ASK, "study": SYSTEM_PROMPT_STUDY}.get(self._mode, SYSTEM_PROMPT_AUTO)
         self.conversation_history = [
             {"role": "system", "content": prompt}
         ]

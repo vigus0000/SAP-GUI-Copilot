@@ -6,6 +6,41 @@
 
 ---
 
+## [0.5.1] - 2026-06-04
+
+#### Changed
+- **Study Mode 預設值處理**
+  - Study prompt 明確規定 SOP 是參考資料，必須優先依照目前 SAP 畫面狀態引導。
+  - 欄位已有非空目前值時，AI 教練應引導使用者確認沿用，不再要求重新輸入 SOP 中的舊值。
+  - `guide_user_action()` 會讀取並顯示目標元件目前值，讓使用者能直接判斷是否需要修改。
+- **Record Mode 預設值辨識**
+  - Monitor 會將畫面跳轉後新出現的非空欄位標記為 `FIELD_DEFAULT`，代表 SAP 系統預設值。
+  - Recorder 會保留 `FIELD_DEFAULT` raw event 供除錯，但不會壓入 SOP steps，避免 Study Mode 把系統預設值當作使用者必填輸入。
+- **Scanner 欄位摘要修正**
+  - `fields` 摘要排除 menu / button / toolbar 等非表單輸入元件，避免真正欄位被前 20 筆 menu 擠掉。
+
+## [0.5.0] - 2026-06-03
+
+#### Added
+- **AI 互動引導工具 (`sap_agent_tools.py`)**
+  - 新增 `guide_user_action(element_id, instruction)`，透過高亮元件與 CLI 印出指示，並等待使用者按 Enter 確認，實現真正的 Human-in-the-loop (HITL) 互動。
+- **Study Mode 升級為 AI 教練 (`llm_brain.py`)**
+  - 新增專屬的 `SYSTEM_PROMPT_STUDY`，嚴格禁止 AI 呼叫寫入工具（如 `set_text`, `click`）。
+  - 新增 `_process_study()`，專門處理教練模式的 ReAct 迴圈，且具備安全機制攔截非法工具呼叫。
+- **自然語言 SOP 生成 (`sap_recorder.py`)**
+  - 錄製結束 (`/stop`) 時，新增 `generate_sop_with_llm()`，自動將繁雜的 JSON 軌跡送到 GitHub Copilot API 總結為繁體中文的 Markdown SOP，並儲存至 `skills/` 目錄。
+
+#### Changed
+- **移除了基於巨集回放的舊代碼 (`main.py`)**
+  - 刪除超過 1,200 行的舊版 `run_study` 迭代迴圈與各種硬編碼的欄位對齊、錯誤處理邏輯。
+  - 移除已不再需要的 `STUDY_*` 系列環境變數。
+- **`/study` 指令重構**
+  - `/study` 現在會直接讀取 Markdown SOP 文本，並交由 `agent.process_message()` 以 `extra_context` 形式啟動全新的 Agentic 教練流程。
+- **技能庫支援 Markdown (`sap_skill_library.py`)**
+  - 優先讀取 `.md` 格式的 SOP 檔案，並與現有的 JSON SOP 保持向下相容。
+- CLI banner 與模組 docstring 更新為 `V0.5.0 (Phase 4 — Agentic Coach)`。
+- CLI 模式指示器新增 `📘 STUDY` 狀態。
+
 ## [0.4.1] - 2026-06-03
 
 ### Changed

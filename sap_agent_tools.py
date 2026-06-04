@@ -855,12 +855,24 @@ def _normalize_element_id(session, element_id):
 def _is_editable_element(element_info):
     """判斷掃描結果中的元件是否像可輸入欄位。"""
     elem_type = element_info.get("type", "")
+    if elem_type in {
+        "GuiButton",
+        "GuiLabel",
+        "GuiMenu",
+        "GuiMenubar",
+        "GuiStatusbar",
+        "GuiToolbar",
+    }:
+        return False
+    if "Menu" in elem_type or "Toolbar" in elem_type:
+        return False
     return (
-        element_info.get("changeable")
-        or "TextField" in elem_type
+        "TextField" in elem_type
         or "CTextField" in elem_type
         or "PasswordField" in elem_type
         or "ComboBox" in elem_type
+        or "CheckBox" in elem_type
+        or "RadioButton" in elem_type
     )
 
 
@@ -1133,6 +1145,71 @@ def visualize_element(session, element_id: str, duration_seconds: float = 1.2, s
             "element_id": element_id,
             "error": f"定位或高亮失敗: {e}",
         }
+
+
+def guide_user_action(session, element_id: str, instruction: str) -> dict:
+    """
+    引導使用者在 SAP GUI 上執行操作（Study Mode 專用）。
+
+    高亮指定元件並顯示操作指引，然後等待使用者確認已完成。
+    此工具**不會**替使用者執行任何寫入操作。
+
+    Args:
+        session: SAP Session COM 物件
+        element_id: 要高亮的 SAP 元件 ID
+        instruction: 要顯示給使用者的操作指引文字
+
+    Returns:
+        dict: 操作結果
+    """
+    # Step 1: 高亮元件
+    viz_result = visualize_element(
+        session,
+        element_id=element_id,
+        duration_seconds=1.5,
+        set_focus=True,
+    )
+    current_value = ""
+    try:
+        element = session.FindById(_normalize_element_id(session, element_id))
+        element_type = _get_element_type_name(element)
+        for attr in ("Text", "Key", "Value"):
+            value = _safe_get_attr(element, attr, None)
+            if value not in (None, ""):
+                current_value = str(value)
+                break
+        if not current_value and element_type in ("GuiCheckBox", "GuiRadioButton"):
+            current_value = str(bool(_safe_get_attr(element, "Selected", False)))
+    except Exception:
+        pass
+
+    # Step 2: 印出指引
+    print(f"\n\033[1;33m  📌 操作指引:\033[0m")
+    print(f"\033[1;37m     {instruction}\033[0m")
+    if viz_result.get("element_type"):
+        print(f"\033[90m     元件: {element_id} ({viz_result.get('element_type', '')})\033[0m")
+    if current_value:
+        print(f"\033[90m     目前值: {current_value}\033[0m")
+    if not viz_result.get("success"):
+        print(f"\033[33m     ⚠ 無法高亮元件: {viz_result.get('error', '')}\033[0m")
+
+    # Step 3: 等待使用者確認
+    print()
+    user_response = input("\033[1;36m  ✅ 完成後按 Enter 繼續（或輸入 /skip 略過）> \033[0m").strip()
+
+    skipped = user_response.lower() in ("/skip", "skip", "s")
+
+    return {
+        "success": True,
+        "action": "guide_user_action",
+        "element_id": element_id,
+        "instruction": instruction,
+        "user_confirmed": not skipped,
+        "skipped": skipped,
+        "visualize": viz_result,
+        "current_value": current_value,
+        "message": "使用者已略過此步驟" if skipped else "使用者已確認完成操作",
+    }
 
 
 def _line_count(element):
@@ -2212,6 +2289,31 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "guide_user_action",
+            "description": (
+                "引導使用者在 SAP GUI 上執行操作（Study Mode 專用）。"
+                "高亮指定元件，顯示操作指引文字，然後等待使用者確認完成。"
+                "此工具不會替使用者執行任何寫入操作，只用於指引。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "element_id": {
+                        "type": "string",
+                        "description": "要高亮的 SAP 元件 ID，例如 'wnd[0]/usr/ctxtVBAK-AUART'。",
+                    },
+                    "instruction": {
+                        "type": "string",
+                        "description": "要顯示給使用者的操作指引文字，例如 '請在此欄位填入銷售文件類型 ZOR'。",
+                    },
+                },
+                "required": ["element_id", "instruction"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "set_tcode",
             "description": "在 T-Code 欄位輸入交易代碼並按 Enter 執行。用於切換 SAP 交易畫面。",
             "parameters": {
@@ -2235,6 +2337,7 @@ TOOL_FUNCTIONS = {
     "set_editor_text": set_editor_text,
     "read_editor_text": read_editor_text,
     "visualize_element": visualize_element,
+    "guide_user_action": guide_user_action,
     "click": click,
     "send_vkey": send_vkey,
     "handle_popup": handle_popup,

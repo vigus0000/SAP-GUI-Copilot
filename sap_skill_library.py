@@ -33,7 +33,9 @@ class SAPSkillLibrary:
             if not os.path.exists(directory):
                 continue
             for filename in sorted(os.listdir(directory)):
-                if not filename.endswith(".json"):
+                is_json = filename.endswith(".json")
+                is_md = filename.endswith(".md")
+                if not is_json and not is_md:
                     continue
                 path = os.path.join(directory, filename)
                 try:
@@ -52,8 +54,9 @@ class SAPSkillLibrary:
                     "event_count": data.get("event_count", 0),
                     "raw_event_count": data.get("raw_event_count", data.get("event_count", 0)),
                     "summary": data.get("summary", ""),
-                    "source": source_type,
+                    "source": data.get("source", source_type),
                     "filepath": path,
+                    "format": data.get("format", "json"),
                 })
         return skills
 
@@ -81,6 +84,8 @@ class SAPSkillLibrary:
     def _find_skill_path(self, directory, name):
         safe_name = self._safe_name(name)
         candidates = [
+            os.path.join(directory, f"{name}.md"),
+            os.path.join(directory, f"{safe_name}.md"),
             os.path.join(directory, f"{name}.json"),
             os.path.join(directory, f"{safe_name}.json"),
         ]
@@ -92,20 +97,47 @@ class SAPSkillLibrary:
         if not os.path.exists(directory):
             return ""
         for filename in os.listdir(directory):
-            if not filename.endswith(".json"):
+            is_json = filename.endswith(".json")
+            is_md = filename.endswith(".md")
+            if not is_json and not is_md:
                 continue
             path = os.path.join(directory, filename)
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                data_name = str(data.get("name") or os.path.splitext(filename)[0]).strip().lower()
-            except (json.JSONDecodeError, OSError):
-                continue
-            if data_name == target:
+            base_name = os.path.splitext(filename)[0].strip().lower()
+            if base_name == target:
                 return path
+            if is_json:
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    data_name = str(data.get("name") or base_name).strip().lower()
+                except (json.JSONDecodeError, OSError):
+                    continue
+                if data_name == target:
+                    return path
         return ""
 
     def _load_path(self, path, source_type):
+        # Markdown SOP 檔案
+        if path.endswith(".md"):
+            with open(path, "r", encoding="utf-8") as f:
+                sop_text = f.read()
+            name = os.path.splitext(os.path.basename(path))[0]
+            return {
+                "name": name,
+                "source": "skill",
+                "filepath": path,
+                "format": "markdown",
+                "sop_text": sop_text,
+                "events": [],
+                "raw_events": [],
+                "event_count": 0,
+                "raw_event_count": 0,
+                "duration_seconds": 0,
+                "summary": sop_text[:200].replace("\n", " ").strip(),
+                "created_at": "",
+            }
+
+        # JSON SOP 檔案
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
@@ -137,6 +169,10 @@ class SAPSkillLibrary:
         return normalized
 
     def _format_summary(self, data):
+        # Markdown SOP 直接回傳內容
+        if data.get("format") == "markdown" and data.get("sop_text"):
+            return data["sop_text"]
+
         lines = [f"## SOP / Skill: {data.get('name', '')}"]
         lines.append(f"來源: {data.get('source', 'unknown')}")
         lines.append(f"檔案: {data.get('filepath', '')}")

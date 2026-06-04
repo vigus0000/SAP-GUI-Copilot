@@ -10,14 +10,17 @@ SAP GUI 操作紀錄管理器
 
 import json
 import os
+import time
+import requests
 from datetime import datetime
 
 
-NOISY_EVENT_TYPES = {"FOCUS_CHANGE"}
+NOISY_EVENT_TYPES = {"FOCUS_CHANGE", "FIELD_DEFAULT"}
 
 
 # 錄製檔案儲存目錄
 RECORDINGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings")
+SKILLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills")
 
 
 # 事件類型的中文描述
@@ -29,6 +32,7 @@ EVENT_TYPE_LABELS = {
     "WINDOW_CLOSE": "🪟 彈窗關閉",
     "FOCUS_CHANGE": "🎯 焦點移動",
     "FIELD_CHANGE": "✏️ 欄位修改",
+    "FIELD_DEFAULT": "🔹 系統預設值",
     "STATUS_MESSAGE": "💬 狀態訊息",
 }
 
@@ -167,11 +171,12 @@ class SAPRecorder:
             detail_str = f"{details.get('from_tcode', '?')} → {details.get('to_tcode', '?')}"
         elif event_type == "SCREEN_CHANGE":
             detail_str = f"畫面 {details.get('from_screen', '?')} → {details.get('to_screen', '?')}"
-        elif event_type == "FIELD_CHANGE":
+        elif event_type in ("FIELD_CHANGE", "FIELD_DEFAULT"):
             elem_id = details.get("element_id", "?")
             # 只顯示最後一段 ID（更簡潔）
             short_id = elem_id.split("/")[-1] if "/" in elem_id else elem_id
-            detail_str = f"{short_id} = \"{details.get('to_value', '')}\""
+            prefix = "預設 " if event_type == "FIELD_DEFAULT" else ""
+            detail_str = f"{prefix}{short_id} = \"{details.get('to_value', '')}\""
         elif event_type in ("ACTIVE_WINDOW_CHANGE", "WINDOW_OPEN", "WINDOW_CLOSE"):
             detail_str = f"{details.get('window_id', details.get('to_window', '?'))} {details.get('title', '')}"
         elif event_type == "FOCUS_CHANGE":
@@ -294,6 +299,10 @@ class SAPRecorder:
                 elem_id = details.get("element_id", "?")
                 short_id = elem_id.split("/")[-1] if "/" in elem_id else elem_id
                 step = f"填入欄位: {short_id} = \"{details.get('to_value', '')}\""
+            elif event_type == "FIELD_DEFAULT":
+                elem_id = details.get("element_id", "?")
+                short_id = elem_id.split("/")[-1] if "/" in elem_id else elem_id
+                step = f"確認系統預設值: {short_id} = \"{details.get('to_value', '')}\""
             elif event_type == "ACTIVE_WINDOW_CHANGE":
                 step = f"活動視窗變更: {details.get('from_window', '?')} → {details.get('to_window', '?')} ({details.get('title', '')})"
             elif event_type == "WINDOW_OPEN":
@@ -404,3 +413,136 @@ class SAPRecorder:
         parts.append(f"共 {len(events)} 個操作步驟")
 
         return "，".join(parts)
+
+    def generate_sop_with_llm(self, name, events, auth, screen_state=None):
+        """
+        使用 LLM 將錄製的 raw events 轉換為自然語言 SOP 指南。
+
+        Args:
+            name: SOP 名稱
+            events: compacted events 列表
+            auth: CopilotAuth 認證物件
+            screen_state: 停止錄製時的畫面掃描（可選）
+
+        Returns:
+            str: 儲存的 .md 檔案路徑，失敗時回傳空字串
+        """
+        from copilot_auth import CopilotAuth
+
+        events_json = json.dumps(events, ensure_ascii=False, indent=2)
+        screen_context = ""
+        if screen_state:
+            screen_context = f"\n\n## 停止錄製時的畫面狀態\n```json\n{json.dumps(screen_state, ensure_ascii=False, indent=2)}\n```"
+
+        prompt = f"""請將以下 SAP GUI 操作錄製事件整理成一份清晰的自然語言操作指南（SOP）。
+
+## 錄製名稱
+{name}
+
+## 錄製事件（JSON）
+```json
+{events_json}
+```
+{screen_context}
+
+## 要求
+1. 用繁體中文撰寫
+2. 每個步驟要清楚說明：操作什麼、在哪裡操作、填入什麼值
+3. 如果事件中有 element_id，在步驟中附註元件 ID，方便系統定位
+4. 步驟應該是使用者可以跟著做的指引，不是技術日誌
+5. 在開頭簡述這個 SOP 的目的
+6. 如果有 T-Code，明確說明要進入哪個交易
+7. 如果事件類型是 FIELD_DEFAULT 或 details.system_default=true，代表畫面跳轉後 SAP 自動帶出的預設值，不是使用者手動輸入；不要寫成「請輸入」，最多描述為「確認系統已預設」或直接略過
+8. 如果欄位在畫面上已有可接受的目前值，Study Mode 應引導使用者確認沿用，而不是要求重新輸入錄製值
+9. 直接輸出 Markdown 格式的 SOP，不要加額外的包裝或說明
+
+## 輸出格式範例
+# SOP: [名稱]
+
+## 目的
+[簡述]
+
+## 前提條件
+- 已登入 SAP GUI
+
+## 操作步驟
+1. 進入交易 XX01 — 在 T-Code 欄位（wnd[0]/tbar[0]/okcd）輸入 "XX01" 並按 Enter
+2. 在「欄位名稱」欄位（wnd[0]/usr/ctxtXXX）填入 "值"
+3. ...
+"""
+
+        headers = {
+            "Authorization": f"Bearer {auth.get_token()}",
+            "Content-Type": "application/json",
+            "Editor-Version": "vscode/1.100.0",
+            "Editor-Plugin-Version": "copilot-chat/0.24.0",
+            "Copilot-Integration-Id": "vscode-chat",
+            "Openai-Intent": "conversation-panel",
+        }
+
+        model = os.getenv("COPILOT_MODEL", "gpt-5-mini")
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "你是一個 SAP GUI 操作文件撰寫專家。你的任務是將 JSON 格式的操作錄製事件轉換成清晰的自然語言操作指南。"},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.2,
+        }
+
+        copilot_url = "https://api.githubcopilot.com/chat/completions"
+        max_retries = 3
+
+        for attempt in range(max_retries + 1):
+            try:
+                resp = requests.post(copilot_url, headers=headers, json=payload, timeout=90)
+
+                if resp.status_code == 401 and attempt < max_retries:
+                    print("\033[33m[Recorder] Token 過期，刷新中...\033[0m")
+                    auth._refresh_copilot_token()
+                    headers["Authorization"] = f"Bearer {auth.get_token()}"
+                    continue
+
+                if resp.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
+                    wait = min(2 ** attempt * 2, 30)
+                    print(f"\033[33m[Recorder] API {resp.status_code}，{wait}s 後重試 ({attempt+1}/{max_retries})\033[0m")
+                    time.sleep(wait)
+                    continue
+
+                if resp.status_code != 200:
+                    print(f"\033[31m[Recorder] SOP 生成失敗: HTTP {resp.status_code}\033[0m")
+                    return ""
+
+                result = resp.json()
+                choices = result.get("choices", [])
+                if not choices:
+                    print("\033[31m[Recorder] SOP 生成失敗: API 回應無 choices\033[0m")
+                    return ""
+
+                sop_text = choices[0].get("message", {}).get("content", "")
+                if not sop_text.strip():
+                    print("\033[31m[Recorder] SOP 生成失敗: 回傳內容為空\033[0m")
+                    return ""
+
+                # 儲存到 ./skills/
+                os.makedirs(SKILLS_DIR, exist_ok=True)
+                safe_name = "".join(c for c in name if c.isalnum() or c in (" ", "_", "-", ".", "（", "）"))
+                safe_name = safe_name.strip() or "unnamed"
+                filepath = os.path.join(SKILLS_DIR, f"{safe_name}.md")
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(sop_text)
+
+                print(f"\033[1;32m  📄 已生成自然語言 SOP: {filepath}\033[0m")
+                return filepath
+
+            except requests.Timeout:
+                if attempt < max_retries:
+                    print(f"\033[33m[Recorder] API 逾時，重試中 ({attempt+1}/{max_retries})\033[0m")
+                    continue
+                print("\033[31m[Recorder] SOP 生成失敗: API 逾時\033[0m")
+                return ""
+            except Exception as e:
+                print(f"\033[31m[Recorder] SOP 生成失敗: {e}\033[0m")
+                return ""
+
+        return ""

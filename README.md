@@ -196,11 +196,12 @@ Record Mode 使用 polling snapshot diff，不依賴不穩定的 SAP COM events�
 - 焦點欄位變化
 - 文字欄位、下拉選單、checkbox、radio 變化
 - 狀態列訊息
+- 畫面跳轉後 SAP 自動帶出的非空欄位會標記為 `FIELD_DEFAULT`，保留在 raw events 供除錯，但不會成為 SOP 必填步驟
 
 錄製檔會保留兩層資料：
 
 - `raw_events`：原始 polling 事件，用於除錯
-- `events`：壓縮後 SOP 步驟，用於 `/play`、Ask Mode 參考與後續重放
+- `events`：壓縮後 SOP 步驟，用於 `/play`、Ask Mode 參考與後續引導；系統預設值不會被壓成使用者輸入步驟
 
 Study Mode 透過 `sap_skill_library.py` 讀取 `skills/` 與 `recordings/` 中的 JSON，並使用 `events` 作為互動式引導參考。若兩邊有同名項目，`skills/` 會優先，適合放置整理後的穩定教學流程。
 
@@ -214,6 +215,7 @@ Study Mode 預設採互動式參考引導流程；錄製值與錄製畫面不是
 - 欄位提示會從目前畫面 scan 的 `fields` 解析 SAP label / tooltip / name，優先顯示「付款人」「請款文件開始」這類畫面文字，並附上目前值、欄位型別、畫面名稱與元件 ID
 - 若 SAP 版面導致 label 沒配到，Study Mode 會再用座標尋找鄰近左側 label，最後才使用內建欄位字典或技術欄位名作 fallback
 - 錄製值只作為參考值；若目前 SAP 欄位已有值，直接 Enter 會使用目前值作為本次預設，輸入新值可覆寫，例如日期區間、付款人代號
+- AI 教練會優先檢查目前畫面 `fields[].value`；欄位已有值時，會引導確認沿用，而不是要求重新輸入 SOP 舊值
 - 使用者在 SAP GUI 手動輸入後，agent 會讀回欄位值並確認是否符合本次值
 - 若驗證不符合，可選擇重試輸入、接受目前值、略過或中止
 - 畫面跳轉事件代表錄製時偵測到頁面變化；若沒有更細的按鈕事件，Study Mode 會先嘗試 F8/Execute，若該 vkey 未啟用則改送 Enter

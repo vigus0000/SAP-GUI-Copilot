@@ -63,6 +63,10 @@ def _read_element_value(element, type_name):
     return None
 
 
+def _is_okcode_field_id(element_id):
+    return str(element_id or "").endswith("/tbar[0]/okcd") or str(element_id or "").endswith("/okcd")
+
+
 class ScreenSnapshot:
     """SAP 畫面快照，用於比對前後差異"""
 
@@ -337,18 +341,34 @@ def _diff_snapshots(old_snap, new_snap):
         })
 
     # 6. 欄位值變更
+    navigation_event_seen = any(
+        event.get("event_type") in {
+            "TCODE_CHANGE",
+            "SCREEN_CHANGE",
+            "WINDOW_OPEN",
+            "ACTIVE_WINDOW_CHANGE",
+        }
+        for event in events
+    )
     for field_id, new_value in new_snap.field_values.items():
         old_value = old_snap.field_values.get(field_id, "")
         if old_value != new_value and new_value:
+            is_new_field = field_id not in old_snap.field_values
+            is_default_value = (
+                navigation_event_seen
+                and is_new_field
+                and not _is_okcode_field_id(field_id)
+            )
             events.append({
                 "timestamp": now,
-                "event_type": "FIELD_CHANGE",
+                "event_type": "FIELD_DEFAULT" if is_default_value else "FIELD_CHANGE",
                 "details": {
                     "element_id": field_id,
                     "from_value": old_value,
                     "to_value": new_value,
                     "tcode": new_snap.tcode,
                     "screen_number": new_snap.screen_number,
+                    "system_default": is_default_value,
                 },
             })
 
