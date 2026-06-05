@@ -456,6 +456,8 @@ class SAPAgent:
 
     def _trim_conversation_history(self):
         """跨使用者請求時裁切歷史，丟掉舊 tool trace，避免 payload 不斷膨脹。"""
+        self._repair_tool_call_history()
+
         if len(self.conversation_history) <= CONVERSATION_HISTORY_LIMIT:
             return
 
@@ -476,6 +478,64 @@ class SAPAgent:
             msg for msg in compactable_messages
         ][-(CONVERSATION_HISTORY_LIMIT - len(system_messages)):]
         self.conversation_history = system_messages + recent_messages
+
+    def _repair_tool_call_history(self):
+        """
+        Remove invalid dangling tool-call messages before sending history to the API.
+
+        Chat Completions requires every assistant message containing tool_calls to be
+        followed immediately by tool messages for every tool_call_id. If a previous
+        run was interrupted between the assistant tool call and tool result append,
+        the next API request will fail with invalid_request_body unless we repair it.
+        """
+        repaired = []
+        messages = self.conversation_history
+        i = 0
+        repaired_any = False
+
+        while i < len(messages):
+            message = messages[i]
+            role = message.get("role")
+
+            if role == "assistant" and message.get("tool_calls"):
+                expected_ids = [
+                    tool_call.get("id")
+                    for tool_call in message.get("tool_calls", [])
+                    if tool_call.get("id")
+                ]
+                expected = set(expected_ids)
+                tool_messages = []
+                seen = set()
+                j = i + 1
+
+                while j < len(messages) and messages[j].get("role") == "tool":
+                    tool_message = messages[j]
+                    tool_call_id = tool_message.get("tool_call_id")
+                    if tool_call_id in expected:
+                        tool_messages.append(tool_message)
+                        seen.add(tool_call_id)
+                    else:
+                        repaired_any = True
+                    j += 1
+
+                if expected and expected.issubset(seen):
+                    repaired.append(message)
+                    repaired.extend(tool_messages)
+                else:
+                    repaired_any = True
+                i = j
+                continue
+
+            if role == "tool":
+                repaired_any = True
+                i += 1
+                continue
+
+            repaired.append(message)
+            i += 1
+
+        if repaired_any:
+            self.conversation_history = repaired
 
     def _handle_confirmation(self, session, tool_result, tool_name, tool_args):
         """
@@ -670,14 +730,29 @@ class SAPAgent:
 
                 print(f"\033[36m[Agent] 呼叫工具: {tool_name}({tool_args})\033[0m")
 
-                tool_result = self._execute_tool_call(session, tool_name, tool_args)
+                interrupted = False
+                try:
+                    tool_result = self._execute_tool_call(session, tool_name, tool_args)
 
-                if tool_result.get("requires_confirmation"):
-                    tool_result = self._handle_confirmation(
-                        session, tool_result, tool_name, tool_args
-                    )
+                    if tool_result.get("requires_confirmation"):
+                        tool_result = self._handle_confirmation(
+                            session, tool_result, tool_name, tool_args
+                        )
 
-                tool_result = self._attach_screen_after_tool(session, tool_result)
+                    tool_result = self._attach_screen_after_tool(session, tool_result)
+                except KeyboardInterrupt:
+                    interrupted = True
+                    tool_result = {
+                        "success": False,
+                        "action": tool_name,
+                        "error": "使用者中斷工具執行",
+                    }
+                except Exception as e:
+                    tool_result = {
+                        "success": False,
+                        "action": tool_name,
+                        "error": f"工具執行例外: {e}",
+                    }
 
                 console_result = dict(tool_result)
                 if "screen_after" in console_result:
@@ -689,6 +764,9 @@ class SAPAgent:
                     "tool_call_id": tool_call_id,
                     "content": json.dumps(tool_result, ensure_ascii=False),
                 })
+
+                if interrupted:
+                    raise KeyboardInterrupt
 
         return "⚠️ 已達最大操作次數限制，請確認當前畫面狀態是否正確。"
 
@@ -808,9 +886,26 @@ class SAPAgent:
                     }
                 else:
                     print(f"\033[36m[Agent] 呼叫工具: {tool_name}({tool_args})\033[0m")
-                    tool_result = self._execute_tool_call(session, tool_name, tool_args)
-
-                tool_result = self._attach_screen_after_tool(session, tool_result)
+                    interrupted = False
+                    try:
+                        tool_result = self._execute_tool_call(session, tool_name, tool_args)
+                        tool_result = self._attach_screen_after_tool(session, tool_result)
+                    except KeyboardInterrupt:
+                        interrupted = True
+                        tool_result = {
+                            "success": False,
+                            "action": tool_name,
+                            "error": "使用者中斷工具執行",
+                        }
+                    except Exception as e:
+                        tool_result = {
+                            "success": False,
+                            "action": tool_name,
+                            "error": f"工具執行例外: {e}",
+                        }
+                if tool_name not in STUDY_ALLOWED_TOOLS:
+                    interrupted = False
+                    tool_result = self._attach_screen_after_tool(session, tool_result)
                 print(f"\033[90m[Agent] 工具結果: {json.dumps({k: v for k, v in tool_result.items() if k != 'screen_after'}, ensure_ascii=False)}\033[0m")
 
                 self.conversation_history.append({
@@ -818,6 +913,9 @@ class SAPAgent:
                     "tool_call_id": tool_call_id,
                     "content": json.dumps(tool_result, ensure_ascii=False),
                 })
+
+                if interrupted:
+                    raise KeyboardInterrupt
 
                 if self._study_tool_requested_finish(tool_name, tool_result):
                     return self._study_finish_summary(tool_result)

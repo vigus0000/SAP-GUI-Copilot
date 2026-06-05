@@ -209,6 +209,8 @@ Study Mode 透過 `sap_skill_library.py` 讀取 `skills/` 與 `recordings/` 中�
 
 Skill 自動保存會先清理自然語句，避免整句話直接變成檔名。例如 `/study 教我如何查詢物料` 會保存為 `skills/查詢物料.md`，同時保留原始查詢作為別名；之後輸入 `/study 查詢物料` 或 `/study 教我如何查詢物料` 都會命中同一份 skill。`/recordings` 也會依正規化名稱去重，避免同一流程重複顯示。
 
+若工具執行中途被 Ctrl+C 或例外中斷，Copilot API 可能拒絕後續請求並回報 `assistant message with tool_calls must be followed by tool messages`。目前 Agent 會在送出下一次 API 前自動修復這類 dangling tool-call history；通常可直接重新輸入指令，不需要手動 `/reset`。
+
 Study Mode 預設採互動式參考引導流程；錄製值與錄製畫面不是絕對準則，而是提示使用者理解流程的參考資料：
 
 - T-Code 切換會重放 OKCode + Enter，或直接使用 `set_tcode()`

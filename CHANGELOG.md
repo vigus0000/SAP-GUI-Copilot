@@ -6,6 +6,14 @@
 
 ---
 
+## [0.6.3] - 2026-06-05
+
+#### Fixed
+- **Copilot tool call 歷史修復**
+  - 修正前一次工具呼叫被中斷後，對話歷史中殘留 assistant `tool_calls` 但缺少對應 `tool` response，導致後續每次呼叫 Copilot API 都回 400 `invalid_request_body`。
+  - 送出 API 前會自動清理 dangling tool-call history，讓使用者不必手動 `/reset` 才能恢復。
+  - Auto / Study Mode 的工具執行若遇到例外或 Ctrl+C 中斷，會補上一筆 tool error response，降低再次污染 conversation history 的機率。
+
 ## [0.6.2] - 2026-06-04
 
 #### Changed
