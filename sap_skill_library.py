@@ -15,6 +15,7 @@ from sap_recorder import RECORDINGS_DIR, SAPRecorder
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 SKILLS_DIR = os.path.join(ROOT_DIR, "skills")
+SKILL_INDEX_FILENAME = "_skill_index.json"
 
 
 class SAPSkillLibrary:
@@ -50,6 +51,20 @@ class SAPSkillLibrary:
         "怎麼查",
     )
 
+    TAG_GROUPS = {
+        "查詢": {"查詢", "查看", "顯示", "查", "display", "show", "displaying"},
+        "建立": {"建立", "新增", "創建", "create", "new"},
+        "修改": {"修改", "變更", "更改", "change", "edit"},
+        "物料": {"物料", "料號", "material", "matnr", "mara", "mm03", "mmbe"},
+        "庫存": {"庫存", "存貨", "inventory", "stock", "mmbe"},
+        "請款": {"請款", "發票", "billing", "invoice", "vf05", "vbrk", "vbrp"},
+        "銷售": {"銷售", "sales", "sd", "va01", "va02", "va03"},
+        "採購": {"採購", "purchase", "purchasing", "me21n", "me22n", "me23n"},
+        "ABAP": {"abap", "se38", "程式", "program", "report"},
+    }
+
+    GENERIC_TAGS = {"查詢", "建立", "修改"}
+
     def __init__(self, skill_dirs=None):
         self.skill_dirs = skill_dirs or [
             ("skill", SKILLS_DIR),
@@ -65,6 +80,8 @@ class SAPSkillLibrary:
             if not os.path.exists(directory):
                 continue
             for filename in self._sorted_skill_files(directory):
+                if filename == SKILL_INDEX_FILENAME:
+                    continue
                 is_json = filename.endswith(".json")
                 is_md = filename.endswith(".md")
                 if not is_json and not is_md:
@@ -117,17 +134,55 @@ class SAPSkillLibrary:
         else:
             content = self._replace_markdown_title(content, canonical_name)
 
+        tags = self.extract_skill_tags(canonical_name, f"{name}\n{content}")
         metadata = (
             f"\n\n---\n"
             f"自動建立時間: {datetime.now().isoformat(timespec='seconds')}\n"
             f"來源: /study 即席教學\n"
+            f"Tags: {', '.join(tags)}\n"
         )
         if canonical_name != name:
             metadata += f"原始查詢: {name}\n"
             metadata += f"查詢別名: {name}\n"
         with open(path, "w", encoding="utf-8") as f:
             f.write(content + metadata)
+        self.rebuild_index()
         return path
+
+    def rebuild_index(self) -> str:
+        """Rebuild a lightweight tag index for semantic-ish skill lookup."""
+        entries = []
+        for source_type, directory in self.skill_dirs:
+            if not os.path.exists(directory):
+                continue
+            for filename in self._sorted_skill_files(directory):
+                if filename == SKILL_INDEX_FILENAME:
+                    continue
+                is_json = filename.endswith(".json")
+                is_md = filename.endswith(".md")
+                if not is_json and not is_md:
+                    continue
+                path = os.path.join(directory, filename)
+                try:
+                    data = self._load_path(path, source_type)
+                except (json.JSONDecodeError, OSError, ValueError):
+                    continue
+                text = data.get("sop_text") or data.get("summary") or ""
+                tags = data.get("tags") or self.extract_skill_tags(data.get("name", ""), text)
+                entries.append({
+                    "name": data.get("name", ""),
+                    "canonical_name": self.canonical_skill_name(data.get("name", "")),
+                    "tags": tags,
+                    "source": source_type,
+                    "format": data.get("format", "json"),
+                    "filepath": os.path.relpath(path, ROOT_DIR),
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
+                })
+
+        index_path = os.path.join(self.skill_dirs[0][1], SKILL_INDEX_FILENAME)
+        with open(index_path, "w", encoding="utf-8") as f:
+            json.dump({"version": 1, "skills": entries}, f, ensure_ascii=False, indent=2)
+        return index_path
 
     # Compatibility with existing CLI naming.
     def list_recordings(self) -> list:
@@ -159,6 +214,8 @@ class SAPSkillLibrary:
             return ""
         fuzzy_candidates = []
         for filename in self._sorted_skill_files(directory):
+            if filename == SKILL_INDEX_FILENAME:
+                continue
             is_json = filename.endswith(".json")
             is_md = filename.endswith(".md")
             if not is_json and not is_md:
@@ -171,8 +228,11 @@ class SAPSkillLibrary:
             for target_key in target_keys:
                 for key in keys:
                     if target_key and key and (target_key in key or key in target_key):
-                        fuzzy_candidates.append((len(key), path))
+                        fuzzy_candidates.append((50 + len(key), path))
                         break
+            semantic_score = self._semantic_score(name, names)
+            if semantic_score > 0:
+                fuzzy_candidates.append((semantic_score, path))
         if fuzzy_candidates:
             fuzzy_candidates.sort(reverse=True)
             return fuzzy_candidates[0][1]
@@ -184,12 +244,14 @@ class SAPSkillLibrary:
             with open(path, "r", encoding="utf-8") as f:
                 sop_text = f.read()
             name = os.path.splitext(os.path.basename(path))[0]
+            tags = self._markdown_tags(sop_text) or self.extract_skill_tags(name, sop_text)
             return {
                 "name": name,
                 "source": "skill",
                 "filepath": path,
                 "format": "markdown",
                 "sop_text": sop_text,
+                "tags": tags,
                 "events": [],
                 "raw_events": [],
                 "event_count": 0,
@@ -312,6 +374,9 @@ class SAPSkillLibrary:
                     changed = True
                     break
 
+        if text.startswith("查") and not text.startswith("查詢") and len(text) > 1:
+            text = f"查詢{text[1:]}"
+
         return text or original or "unnamed"
 
     @classmethod
@@ -333,7 +398,7 @@ class SAPSkillLibrary:
     def _sorted_skill_files(cls, directory):
         filenames = [
             filename for filename in os.listdir(directory)
-            if filename.endswith(".json") or filename.endswith(".md")
+            if filename != SKILL_INDEX_FILENAME and (filename.endswith(".json") or filename.endswith(".md"))
         ]
 
         def sort_key(filename):
@@ -358,6 +423,10 @@ class SAPSkillLibrary:
                     if isinstance(aliases, str):
                         aliases = [aliases]
                     names.extend(str(item) for item in aliases)
+                    tags = data.get("tags") or []
+                    if isinstance(tags, str):
+                        tags = [tags]
+                    names.extend(str(item) for item in tags)
             else:
                 with open(path, "r", encoding="utf-8") as f:
                     for _ in range(80):
@@ -367,7 +436,7 @@ class SAPSkillLibrary:
                         stripped = line.strip()
                         if stripped.startswith("#"):
                             names.append(cls._clean_markdown_title(stripped))
-                        elif stripped.startswith(("原始查詢:", "查詢別名:", "Aliases:", "Alias:")):
+                        elif stripped.startswith(("原始查詢:", "查詢別名:", "Aliases:", "Alias:", "Tags:", "Tag:", "標籤:")):
                             _, value = stripped.split(":", 1)
                             names.extend(item.strip() for item in value.split(","))
         except (json.JSONDecodeError, OSError, ValueError):
@@ -381,6 +450,85 @@ class SAPSkillLibrary:
             if title.startswith(prefix):
                 return title[len(prefix):].strip()
         return title
+
+    @classmethod
+    def _markdown_tags(cls, sop_text: str) -> list:
+        tags = []
+        for line in str(sop_text or "").splitlines():
+            stripped = line.strip()
+            if stripped.startswith(("Tags:", "Tag:", "標籤:")):
+                _, value = stripped.split(":", 1)
+                tags.extend(item.strip() for item in value.split(",") if item.strip())
+        return cls._dedupe_tags(tags)
+
+    @classmethod
+    def extract_skill_tags(cls, name: str, text: str = "") -> list:
+        haystack = f"{name}\n{text}"
+        normalized = cls._normalize_semantic_text(haystack)
+        normalized_name = cls._normalize_semantic_text(name)
+        tags = []
+
+        for tag, aliases in cls.TAG_GROUPS.items():
+            search_area = normalized_name if tag in cls.GENERIC_TAGS else normalized
+            if any(cls._normalize_semantic_text(alias) in search_area for alias in aliases):
+                tags.append(tag)
+
+        for tcode in re.findall(r"\b[A-Z]{2,4}\d{1,3}[A-Z]?\b", str(haystack).upper()):
+            tags.append(tcode)
+
+        canonical = cls.canonical_skill_name(name)
+        if canonical:
+            tags.insert(0, canonical)
+        return cls._dedupe_tags(tags)
+
+    @classmethod
+    def _semantic_terms(cls, *texts) -> set:
+        terms = set()
+        for text in texts:
+            if not text:
+                continue
+            normalized = cls._normalize_semantic_text(text)
+            if normalized:
+                terms.add(normalized)
+            terms.add(cls._lookup_key(text))
+            terms.update(cls.extract_skill_tags(str(text), str(text)))
+        return {term for term in terms if term}
+
+    @classmethod
+    def _semantic_score(cls, query: str, candidate_names: list) -> int:
+        query_terms = cls._semantic_terms(query)
+        candidate_terms = cls._semantic_terms(*candidate_names)
+        overlap = query_terms & candidate_terms
+        if not overlap:
+            return 0
+
+        non_generic_overlap = {term for term in overlap if term not in cls.GENERIC_TAGS}
+        if not non_generic_overlap:
+            return 0
+
+        score = len(non_generic_overlap) * 12 + len(overlap) * 3
+        query_key = cls._lookup_key(query)
+        candidate_keys = {cls._lookup_key(item) for item in candidate_names if item}
+        if query_key in candidate_keys:
+            score += 80
+        return score
+
+    @staticmethod
+    def _normalize_semantic_text(text: str) -> str:
+        return "".join(ch.lower() for ch in str(text or "") if ch.isalnum())
+
+    @staticmethod
+    def _dedupe_tags(tags: list) -> list:
+        result = []
+        seen = set()
+        for tag in tags:
+            tag = str(tag or "").strip()
+            key = tag.lower()
+            if not tag or key in seen:
+                continue
+            seen.add(key)
+            result.append(tag)
+        return result
 
     @classmethod
     def _replace_markdown_title(cls, content: str, canonical_name: str) -> str:

@@ -6,6 +6,33 @@
 
 ---
 
+## [0.6.5] - 2026-06-08
+
+#### Added
+- **SAP TableControl 列選取工具**
+  - 新增 `select_table_row()`，可依 `row_text` 或 `row_index` 選取 `GuiTableControl` 內的列。
+  - 針對 MM03「選擇檢視」這類彈窗，會自動從文字 cell 推導常見 checkbox ID，例如 `chkMSICHTAUSW-KZSEL[0,row]`，解決只點到文字但沒有勾選檢視的問題。
+  - Scanner 新增 `tables` 摘要，`active_popup.tables[].rows[]` 會列出 table row 文字，讓 LLM 可直接使用 `select_table_row(row_text="基本資料 1")`。
+
+#### Changed
+- Auto prompt 明確要求遇到彈窗 table 內 checkbox/選取列時優先使用 `select_table_row()`，選取後再按 Enter/Continue。
+- `/scan` 顯示彈窗時會列出 table rows，方便除錯 table checkbox 類畫面。
+
+## [0.6.4] - 2026-06-08
+
+#### Added
+- **Checkbox / Radio 專用工具**
+  - 新增 `read_checkbox()` 與 `set_checkbox()`，可穩定讀寫 `GuiCheckBox` / `GuiRadioButton` 的 `Selected` 狀態。
+  - `set_text()` 遇到 checkbox/radio 時會自動轉用 `set_checkbox()`，避免把 True/False 當文字寫入。
+  - `handle_popup()` 依 label 填值時若目標是 checkbox/radio，也會改用 `Selected` 狀態設定。
+- **Skill Tag Index**
+  - 新增 `skills/_skill_index.json`，索引每個 skill 的 canonical name、tags、來源與路徑。
+  - Skill 自動保存時會寫入 `Tags:` metadata，查詢時會綜合檔名、標題、別名、tags 與 SAP 關鍵詞做語意式匹配。
+
+#### Changed
+- Scanner 的 `fields` 對 checkbox/radio 會將 `value` 顯示為 `True` / `False`，並保留 `selected` 布林狀態，方便 LLM 判斷目前是否已勾選。
+- Skill 查詢會將 `查物料` 正規化為 `查詢物料`，避免短口語另存成重複 skill。
+
 ## [0.6.3] - 2026-06-05
 
 #### Fixed

@@ -56,7 +56,7 @@ def print_banner():
     print(f"""
 {Colors.CYAN}╔══════════════════════════════════════════════════╗
 ║                                                  ║
-║   🤖 SAP GUI Copilot  V0.6.3  (Phase 4)         ║
+║   🤖 SAP GUI Copilot  V0.6.5  (Phase 4)         ║
 ║   ─────────────────────────────────────────────   ║
 ║   用自然語言操作 SAP，告別繁瑣的 T-Code！        ║
 ║                                                  ║
@@ -157,6 +157,12 @@ def print_screen_scan(session):
                         )
                         more = " ..." if len(options) > 8 else ""
                         print(f"      {Colors.DIM}options: {preview}{more}{Colors.RESET}")
+                for table in popup.get("tables", []):
+                    print(f"    {Colors.CYAN}table: {table.get('id', '')}{Colors.RESET}")
+                    for row in table.get("rows", [])[:12]:
+                        row_text = row.get("text", "")
+                        if row_text:
+                            print(f"      row {row.get('row')}: {row_text}")
                 actions = popup.get("actions", [])
                 if actions:
                     action_text = ", ".join(f"{item.get('action')}={item.get('id')}" for item in actions)

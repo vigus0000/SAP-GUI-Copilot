@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "skills": [
+    {
+      "name": "查詢物料",
+      "canonical_name": "查詢物料",
+      "tags": [
+        "查詢物料",
+        "查詢",
+        "物料",
+        "庫存",
+        "MM03",
+        "MM60"
+      ],
+      "source": "skill",
+      "format": "markdown",
+      "filepath": "skills\\查詢物料.md",
+      "updated_at": "2026-06-08T17:11:31"
+    },
+    {
+      "name": "查詢請款文件",
+      "canonical_name": "查詢請款文件",
+      "tags": [
+        "查詢請款文件",
+        "查詢",
+        "請款",
+        "VF05"
+      ],
+      "source": "recording",
+      "format": "json",
+      "filepath": "recordings\\查詢請款文件.json",
+      "updated_at": "2026-06-08T17:11:31"
+    }
+  ]
+}

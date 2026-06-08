@@ -11,6 +11,7 @@ SAP GUI Scanner & Actor 工具集
 - 敏感操作（Save/Post）標記需要人工確認
 """
 
+import re
 import time
 
 from pywintypes import com_error
@@ -599,16 +600,21 @@ def _extract_form_fields(elements, focused_id=""):
 
         label = _nearest_left_label(elem, labels)
         label_text = _element_text(label) if label else ""
-        text_value = str(elem.get("text", elem.get("value", "")) or "")
+        elem_type = elem.get("type", "")
+        if "CheckBox" in elem_type or "RadioButton" in elem_type:
+            selected = bool(elem.get("selected", False))
+            text_value = str(selected)
+        else:
+            text_value = str(elem.get("text", elem.get("value", "")) or "")
         field = {
             "id": elem.get("id", ""),
-            "type": elem.get("type", ""),
+            "type": elem_type,
             "label": label_text,
             "value": text_value,
-            "empty": text_value.strip() == "",
+            "empty": False if ("CheckBox" in elem_type or "RadioButton" in elem_type) else text_value.strip() == "",
             "changeable": bool(elem.get("changeable")),
             "focused": elem.get("id") == focused_id,
-            "dropdown": "ComboBox" in elem.get("type", ""),
+            "dropdown": "ComboBox" in elem_type,
         }
 
         for key in ("name", "tooltip", "key", "required", "selected", "position", "options"):
@@ -618,6 +624,61 @@ def _extract_form_fields(elements, focused_id=""):
         fields.append(field)
 
     return fields
+
+
+def _table_cell_info(elem):
+    elem_id = elem.get("id", "")
+    match = re.search(r"^(?P<table>.+?/tbl[^/]+?)/(?P<cell>[^/\[]+)\[(?P<col>\d+),(?P<row>\d+)\]$", elem_id)
+    if not match:
+        return None
+    return {
+        "table_id": match.group("table"),
+        "cell_id": elem_id,
+        "cell_name": match.group("cell"),
+        "column": int(match.group("col")),
+        "row": int(match.group("row")),
+        "text": _element_text(elem),
+        "type": elem.get("type", ""),
+        "selected": elem.get("selected"),
+    }
+
+
+def _extract_tables(elements, max_rows=40):
+    """Group SAP GuiTableControl cells into compact row summaries."""
+    table_map = {}
+    for elem in elements:
+        cell = _table_cell_info(elem)
+        if not cell:
+            continue
+        table = table_map.setdefault(cell["table_id"], {"id": cell["table_id"], "rows": {}})
+        row = table["rows"].setdefault(cell["row"], {"row": cell["row"], "cells": []})
+        cell_summary = {
+            "id": cell["cell_id"],
+            "column": cell["column"],
+            "name": cell["cell_name"],
+            "type": cell["type"],
+        }
+        if cell["text"]:
+            cell_summary["text"] = cell["text"]
+        if cell["selected"] is not None:
+            cell_summary["selected"] = bool(cell["selected"])
+        row["cells"].append(cell_summary)
+
+    tables = []
+    for table in table_map.values():
+        rows = []
+        for row in sorted(table["rows"].values(), key=lambda item: item["row"])[:max_rows]:
+            row["cells"].sort(key=lambda item: item.get("column", 9999))
+            row_text = " ".join(
+                cell.get("text", "")
+                for cell in row["cells"]
+                if cell.get("text")
+            ).strip()
+            if row_text:
+                row["text"] = row_text
+            rows.append(row)
+        tables.append({"id": table["id"], "rows": rows})
+    return tables
 
 
 def _extract_window_messages(elements):
@@ -731,6 +792,7 @@ def scan_sap_screen(session):
         "focused_element": None,
         "active_popup": None,
         "fields": [],
+        "tables": [],
         "messages": [],
         "editors": [],
         "elements": [],
@@ -776,6 +838,7 @@ def scan_sap_screen(session):
         _traverse_children(window, result["elements"])
         _normalize_element_infos(result["elements"])
         result["fields"] = _extract_form_fields(result["elements"], focused_id)
+        result["tables"] = _extract_tables(result["elements"])
         result["messages"] = _extract_window_messages(result["elements"])
         result["editors"] = _extract_editors(result["elements"])
     except Exception as e:
@@ -797,6 +860,7 @@ def scan_sap_screen(session):
                 "elements": popup_elements,
                 "actions": _infer_popup_actions(popup_elements),
                 "fields": _extract_form_fields(popup_elements, focused_id),
+                "tables": _extract_tables(popup_elements),
                 "messages": _extract_window_messages(popup_elements),
                 "editors": _extract_editors(popup_elements),
                 "focused_element": result.get("focused_element")
@@ -1034,6 +1098,55 @@ def _set_combo_value(element, desired):
                 errors.append(f"{attr}={candidate}: {e}")
 
     raise RuntimeError("; ".join(errors) or "無法設定 ComboBox")
+
+
+def _parse_bool_value(value, default=None):
+    """Parse common human/LLM boolean values for SAP checkbox/radio tools."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+
+    text = str(value).strip().lower()
+    if text in {"1", "true", "t", "yes", "y", "on", "checked", "check", "select", "selected", "勾選", "選取", "是", "開", "啟用"}:
+        return True
+    if text in {"0", "false", "f", "no", "n", "off", "unchecked", "uncheck", "clear", "deselect", "未勾選", "取消勾選", "否", "關", "停用"}:
+        return False
+    return default
+
+
+def _read_selected_state(element):
+    selected = _safe_get_attr(element, "Selected", None)
+    if selected is None:
+        raise ValueError("目標元件沒有 Selected 狀態")
+    return bool(selected)
+
+
+def _set_selected_state(element, desired):
+    current = _read_selected_state(element)
+    if current == desired:
+        return "noop"
+
+    try:
+        element.Selected = desired
+        return "selected_property"
+    except Exception:
+        pass
+
+    if desired:
+        try:
+            element.Select()
+            return "select"
+        except Exception:
+            pass
+
+    try:
+        element.SetFocus()
+    except Exception:
+        pass
+
+    _press_or_select(element)
+    return "toggle"
 
 
 def _get_clipboard_text():
@@ -1583,6 +1696,304 @@ def read_editor_text(session, element_id: str = "") -> dict:
         }
 
 
+def read_checkbox(session, element_id: str) -> dict:
+    """讀取 SAP GuiCheckBox / GuiRadioButton 的 Selected 狀態。"""
+    element_id = _normalize_element_id(session, element_id)
+    try:
+        element = session.FindById(element_id)
+        element_type = _get_element_type_name(element)
+        if element_type not in ("GuiCheckBox", "GuiRadioButton"):
+            return {
+                "success": False,
+                "action": "read_checkbox",
+                "element_id": element_id,
+                "element_type": element_type,
+                "error": "目標元件不是 GuiCheckBox / GuiRadioButton",
+            }
+
+        selected = _read_selected_state(element)
+        return {
+            "success": True,
+            "action": "read_checkbox",
+            "element_id": element_id,
+            "element_type": element_type,
+            "selected": selected,
+            "value": str(selected),
+            "text": str(_safe_get_attr(element, "Text", "") or ""),
+            "tooltip": str(_safe_get_attr(element, "Tooltip", "") or ""),
+            "name": str(_safe_get_attr(element, "Name", "") or ""),
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "action": "read_checkbox",
+            "element_id": element_id,
+            "error": f"讀取 checkbox/radio 狀態失敗: {e}",
+        }
+
+
+def set_checkbox(session, element_id: str, selected=None, value: str = "") -> dict:
+    """設定 SAP GuiCheckBox / GuiRadioButton 的 Selected 狀態。"""
+    element_id = _normalize_element_id(session, element_id)
+    desired = _parse_bool_value(selected, None)
+    if desired is None:
+        desired = _parse_bool_value(value, None)
+    if desired is None:
+        return {
+            "success": False,
+            "action": "set_checkbox",
+            "element_id": element_id,
+            "error": "請提供 selected=true/false，或 value=勾選/取消勾選",
+        }
+
+    try:
+        element = session.FindById(element_id)
+        element_type = _get_element_type_name(element)
+        if element_type not in ("GuiCheckBox", "GuiRadioButton"):
+            return {
+                "success": False,
+                "action": "set_checkbox",
+                "element_id": element_id,
+                "element_type": element_type,
+                "error": "目標元件不是 GuiCheckBox / GuiRadioButton",
+            }
+
+        before = _read_selected_state(element)
+        method = _set_selected_state(element, bool(desired))
+        _wait_for_session_ready(session)
+        after = _read_selected_state(element)
+        status = _read_status_bar(session)
+        return {
+            "success": after == bool(desired),
+            "action": "set_checkbox",
+            "element_id": element_id,
+            "element_type": element_type,
+            "selected": after,
+            "desired": bool(desired),
+            "before": before,
+            "method": method,
+            "status_bar": status,
+            "error": "" if after == bool(desired) else "設定後狀態未符合 desired",
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "action": "set_checkbox",
+            "element_id": element_id,
+            "desired": bool(desired),
+            "error": f"設定 checkbox/radio 狀態失敗: {e}",
+        }
+
+
+def _find_table_cell_by_text(session, row_text: str, table_id: str = "", window_id: str = ""):
+    wanted = _normalize_text(row_text)
+    if not wanted:
+        return None
+
+    elements = []
+    if table_id:
+        try:
+            table = session.FindById(_normalize_element_id(session, table_id))
+            _traverse_children(table, elements, max_depth=4)
+            _normalize_element_infos(elements)
+        except Exception:
+            elements = []
+
+    if not elements:
+        target_window = _get_window(session, window_id)
+        if target_window:
+            _traverse_children(target_window, elements)
+            _normalize_element_infos(elements)
+
+    best = None
+    best_score = -1
+    for elem in elements:
+        cell = _table_cell_info(elem)
+        if not cell:
+            continue
+        text = _normalize_text(cell.get("text", ""))
+        if not text:
+            continue
+        if wanted == text:
+            score = 1000
+        elif wanted in text or text in wanted:
+            score = min(len(wanted), len(text))
+        else:
+            continue
+        if score > best_score:
+            best = cell
+            best_score = score
+    return best
+
+
+def _try_select_table_row_object(session, table_id: str, row_index: int, selected: bool):
+    table = session.FindById(table_id)
+    for method_name in ("getAbsoluteRow", "GetAbsoluteRow"):
+        method = _callable_member(table, method_name)
+        if not method:
+            continue
+        try:
+            row = method(row_index)
+            for attr in ("Selected", "selected"):
+                try:
+                    setattr(row, attr, selected)
+                    return f"{method_name}.{attr}"
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+    rows = _safe_get_attr(table, "Rows", None)
+    for accessor in (
+        lambda: rows(row_index) if rows is not None else None,
+        lambda: rows.Item(row_index) if rows is not None and _callable_member(rows, "Item") else None,
+    ):
+        try:
+            row = accessor()
+            if row is None:
+                continue
+            for attr in ("Selected", "selected"):
+                try:
+                    setattr(row, attr, selected)
+                    return f"Rows.{attr}"
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return ""
+
+
+def _candidate_table_checkbox_ids(cell):
+    table_id = cell.get("table_id", "")
+    row = cell.get("row")
+    if not table_id or row is None:
+        return []
+
+    names = []
+    cell_name = cell.get("cell_name", "")
+    if "-" in cell_name:
+        prefix = cell_name.split("-", 1)[0]
+        names.extend([
+            f"chk{prefix}-KZSEL",
+            f"chk{prefix}-SELKZ",
+            f"chk{prefix}-SELECT",
+            f"chk{prefix}-MARK",
+        ])
+    names.extend([
+        "chkMSICHTAUSW-KZSEL",
+        "chkMSICHTAUSW-SELKZ",
+        "chkMSICHTAUSW-MARK",
+    ])
+
+    candidates = []
+    for name in dict.fromkeys(names):
+        for col in range(0, 4):
+            candidates.append(f"{table_id}/{name}[{col},{row}]")
+    return candidates
+
+
+def select_table_row(session, row_text: str = "", table_id: str = "", row_index=None, selected=True, window_id: str = "") -> dict:
+    """
+    Select a row in a SAP GuiTableControl, useful for popup table checkboxes such as MM03 view selection.
+    """
+    desired = _parse_bool_value(selected, True)
+    if desired is None:
+        desired = True
+
+    target_cell = None
+    if row_index is None or table_id == "":
+        target_cell = _find_table_cell_by_text(session, row_text, table_id=table_id, window_id=window_id)
+        if target_cell:
+            table_id = target_cell["table_id"]
+            row_index = target_cell["row"]
+
+    if row_index is None:
+        return {
+            "success": False,
+            "action": "select_table_row",
+            "row_text": row_text,
+            "table_id": table_id,
+            "error": "找不到符合文字的表格列，請提供 table_id + row_index 或確認 active_popup.tables",
+        }
+
+    table_id = _normalize_element_id(session, table_id)
+    methods = []
+    errors = []
+
+    try:
+        method = _try_select_table_row_object(session, table_id, int(row_index), bool(desired))
+        if method:
+            methods.append(method)
+            _wait_for_session_ready(session)
+            return {
+                "success": True,
+                "action": "select_table_row",
+                "table_id": table_id,
+                "row_index": int(row_index),
+                "row_text": row_text or (target_cell or {}).get("text", ""),
+                "selected": bool(desired),
+                "method": method,
+                "status_bar": _read_status_bar(session),
+            }
+    except Exception as e:
+        errors.append(f"row object: {e}")
+
+    checkbox_ids = _candidate_table_checkbox_ids(target_cell or {"table_id": table_id, "row": int(row_index), "cell_name": ""})
+    for checkbox_id in checkbox_ids:
+        try:
+            result = set_checkbox(session, checkbox_id, selected=bool(desired))
+            if result.get("success"):
+                result.update({
+                    "action": "select_table_row",
+                    "table_id": table_id,
+                    "row_index": int(row_index),
+                    "row_text": row_text or (target_cell or {}).get("text", ""),
+                    "checkbox_id": checkbox_id,
+                    "method": f"checkbox:{checkbox_id}",
+                })
+                return result
+            errors.append(f"{checkbox_id}: {result.get('error', '')}")
+        except Exception as e:
+            errors.append(f"{checkbox_id}: {e}")
+
+    if target_cell:
+        try:
+            cell_element = session.FindById(target_cell["cell_id"])
+            cell_element.SetFocus()
+            try:
+                cell_element.caretPosition = 0
+            except Exception:
+                pass
+            _press_or_select(cell_element)
+            _wait_for_session_ready(session)
+            return {
+                "success": True,
+                "action": "select_table_row",
+                "table_id": table_id,
+                "row_index": int(row_index),
+                "row_text": target_cell.get("text", row_text),
+                "cell_id": target_cell["cell_id"],
+                "selected": bool(desired),
+                "method": "cell_press_or_select",
+                "warning": "未能確認 checkbox 狀態，但已對表格列 cell 執行 Press/Select",
+                "status_bar": _read_status_bar(session),
+            }
+        except Exception as e:
+            errors.append(f"cell fallback: {e}")
+
+    return {
+        "success": False,
+        "action": "select_table_row",
+        "table_id": table_id,
+        "row_index": int(row_index),
+        "row_text": row_text,
+        "selected": bool(desired),
+        "candidate_checkbox_ids": checkbox_ids,
+        "errors": errors[-12:],
+        "error": "無法選取表格列或其 checkbox",
+    }
+
+
 def set_text(session, element_id: str, value: str) -> dict:
     """
     在 SAP 畫面指定欄位中填入文字值。
@@ -1628,6 +2039,11 @@ def set_text(session, element_id: str, value: str) -> dict:
                 "status_bar": status,
                 "message": "目標是下拉式選單，已改用 ComboBox 選取邏輯",
             }
+        if element_type in ("GuiCheckBox", "GuiRadioButton"):
+            result = set_checkbox(session, element_id, value=value)
+            result["action"] = "set_text (checkbox)"
+            result["message"] = "目標是 checkbox/radio，已改用 Selected 狀態設定"
+            return result
 
         element.Text = value
         _wait_for_session_ready(session)
@@ -1958,8 +2374,15 @@ def handle_popup(
 
             element_id = target_field["id"]
             element = session.FindById(element_id)
-            if _get_element_type_name(element) == "GuiComboBox":
+            element_type = _get_element_type_name(element)
+            if element_type == "GuiComboBox":
                 combo_result = _set_combo_value(element, value)
+            elif element_type in ("GuiCheckBox", "GuiRadioButton"):
+                desired = _parse_bool_value(value, None)
+                if desired is None:
+                    raise ValueError(f"{element_type} 欄位需要布林值，收到: {value}")
+                method = _set_selected_state(element, desired)
+                combo_result = {"method": method, "selected": _read_selected_state(element)}
             else:
                 element.Text = value
                 combo_result = None
@@ -1973,6 +2396,10 @@ def handle_popup(
                 filled_field["selected_key"] = combo_result.get("selected_key", "")
                 filled_field["selected_text"] = combo_result.get("selected_text", "")
                 filled_field["matched_option"] = combo_result.get("matched_option")
+                if "selected" in combo_result:
+                    filled_field["selected"] = combo_result.get("selected")
+                if "method" in combo_result:
+                    filled_field["method"] = combo_result.get("method")
 
         if action == "none":
             return {
@@ -2147,6 +2574,88 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["element_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_checkbox",
+            "description": "讀取 SAP GuiCheckBox / GuiRadioButton 的 Selected 狀態。當 scan fields 顯示 type=GuiCheckBox 或 GuiRadioButton 時使用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "element_id": {
+                        "type": "string",
+                        "description": "GuiCheckBox / GuiRadioButton 元件 ID。",
+                    },
+                },
+                "required": ["element_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_checkbox",
+            "description": (
+                "設定 SAP GuiCheckBox / GuiRadioButton 的 Selected 狀態。"
+                "當 scan fields 顯示 type=GuiCheckBox 或 GuiRadioButton 時使用，不要用 set_text。"
+                "selected=true 表示勾選/選取，selected=false 表示取消勾選。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "element_id": {
+                        "type": "string",
+                        "description": "GuiCheckBox / GuiRadioButton 元件 ID。",
+                    },
+                    "selected": {
+                        "type": "boolean",
+                        "description": "目標狀態。true=勾選/選取，false=取消勾選。",
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "可選。自然語言狀態，例如 '勾選'、'取消勾選'、'true'、'false'。",
+                    },
+                },
+                "required": ["element_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "select_table_row",
+            "description": (
+                "依文字或 row_index 選取 SAP GuiTableControl 的一列。"
+                "適合處理彈窗表格內的 checkbox/選取列，例如 MM03「選擇檢視」中的「基本資料 1」。"
+                "當 active_popup.tables 顯示 table rows，或 checkbox 藏在 tbl... 內時，優先用此工具，不要只 click 文字 cell。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "row_text": {
+                        "type": "string",
+                        "description": "要選取的列文字，例如 '基本資料 1'、'MRP 1'。",
+                    },
+                    "table_id": {
+                        "type": "string",
+                        "description": "可選。GuiTableControl ID，例如 'wnd[1]/usr/tblSAPLMGMMTC_VIEW'。",
+                    },
+                    "row_index": {
+                        "type": "integer",
+                        "description": "可選。可見列 index，從 active_popup.tables[].rows[].row 取得。",
+                    },
+                    "selected": {
+                        "type": "boolean",
+                        "description": "可選。true=選取，false=取消選取。預設 true。",
+                    },
+                    "window_id": {
+                        "type": "string",
+                        "description": "可選。視窗 ID，例如 'wnd[1]'。未提供時使用活動彈窗。",
+                    },
+                },
             },
         },
     },
@@ -2348,6 +2857,9 @@ TOOL_SCHEMAS = [
 TOOL_FUNCTIONS = {
     "set_text": set_text,
     "select_combo": select_combo,
+    "read_checkbox": read_checkbox,
+    "set_checkbox": set_checkbox,
+    "select_table_row": select_table_row,
     "set_editor_text": set_editor_text,
     "read_editor_text": read_editor_text,
     "visualize_element": visualize_element,

@@ -59,7 +59,7 @@ SYSTEM_PROMPT_AUTO = """你是一個專業的 SAP GUI 操作助手。你可以�
 
 ## 你的能力
 1. 閱讀 SAP 畫面的結構化 JSON，理解當前畫面的狀態、欄位、按鈕
-2. 使用工具 (set_text, select_combo, read_editor_text, set_editor_text, visualize_element, click, send_vkey, set_tcode, handle_popup) 來操作 SAP 畫面
+2. 使用工具 (set_text, select_combo, read_checkbox, set_checkbox, select_table_row, read_editor_text, set_editor_text, visualize_element, click, send_vkey, set_tcode, handle_popup) 來操作 SAP 畫面
 3. 根據狀態列訊息判斷操作是否成功
 
 ## 工作流程 (ReAct Loop)
@@ -76,6 +76,10 @@ SYSTEM_PROMPT_AUTO = """你是一個專業的 SAP GUI 操作助手。你可以�
 - screen JSON 中的 fields 會把欄位 label 與元件 ID 配對；填欄位時優先使用 fields 裡的 id 或 handle_popup(field_label=...)
 - 如果 fields 的 type 是 GuiComboBox、dropdown=true 或含 options，代表下拉式選單；必須使用 select_combo，或在彈窗中用 handle_popup 依 label 選值，不要把它當一般文字欄位 set_text
 - 下拉式選單若有 options，優先用 option key；沒有 key 時才用顯示文字
+- 如果 fields 的 type 是 GuiCheckBox 或 GuiRadioButton，讀取狀態使用 read_checkbox，設定狀態使用 set_checkbox；不要用 set_text 寫入 True/False，也不要在狀態未知時盲目 click
+- checkbox/radio 的 fields[].value 會是 "True" / "False"，selected 也會標示布林狀態；操作前先確認目前狀態，避免重複切換
+- 如果 active_popup.tables 或 tables 顯示 GuiTableControl 列資料，且任務是勾選/選擇某一列（例如 MM03「選擇檢視」彈窗中的「基本資料 1」），優先使用 select_table_row(row_text=...)；不要只 click/highlight 文字 cell，因為 checkbox 可能藏在 table 選取欄內
+- 選完 table row 後通常還需要按彈窗的 ok/continue/Enter；先用 select_table_row，再用 handle_popup(action="ok") 或 send_vkey(0, window_id="wnd[1]")
 - 如果 scan 結果有 editors、role=editor、editor_capabilities、type=GuiAbapEditor 或 type=GuiShell 的 ABAP editor，代表程式碼編輯器；讀取程式碼必須使用 read_editor_text，寫入 ABAP 原始碼必須使用 set_editor_text，不要用 set_text
 - read_editor_text / set_editor_text 可不傳 element_id，工具會自動尋找目前畫面的 editor；如果 screen_after.editors 有 id，優先傳該 id
 - 若需要引導使用者看見某個欄位或按鈕，可使用 visualize_element 高亮該元件；這是視覺提示，不代表已填值或點擊
@@ -363,6 +367,7 @@ class SAPAgent:
             "focused_element": screen_state.get("focused_element"),
             "status_bar": screen_state.get("status_bar", {}),
             "fields": self._compact_fields(screen_state.get("fields", [])),
+            "tables": self._compact_tables(screen_state.get("tables", [])),
             "messages": screen_state.get("messages", [])[:10],
             "editors": screen_state.get("editors", [])[:10],
             "editor_sources": screen_state.get("editor_sources", []),
@@ -372,6 +377,7 @@ class SAPAgent:
                 "actions": active_popup.get("actions", []),
                 "messages": active_popup.get("messages", [])[:10],
                 "fields": self._compact_fields(active_popup.get("fields", [])),
+                "tables": self._compact_tables(active_popup.get("tables", [])),
                 "editors": active_popup.get("editors", [])[:10],
                 "focused_element": active_popup.get("focused_element"),
                 "element_count": len(active_popup.get("elements", [])),
@@ -386,6 +392,22 @@ class SAPAgent:
             if "options" in item:
                 item["options"] = item.get("options", [])[:max_options]
                 item["options_truncated"] = len(field.get("options", [])) > max_options
+            compacted.append(item)
+        return compacted
+
+    def _compact_tables(self, tables, max_tables=4, max_rows=24, max_cells=8):
+        compacted = []
+        for table in tables[:max_tables]:
+            item = {"id": table.get("id", ""), "rows": []}
+            rows = table.get("rows", [])
+            for row in rows[:max_rows]:
+                row_item = {
+                    "row": row.get("row"),
+                    "text": row.get("text", ""),
+                    "cells": row.get("cells", [])[:max_cells],
+                }
+                item["rows"].append(row_item)
+            item["rows_truncated"] = len(rows) > max_rows
             compacted.append(item)
         return compacted
 

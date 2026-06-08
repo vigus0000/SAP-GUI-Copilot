@@ -209,6 +209,8 @@ Study Mode 透過 `sap_skill_library.py` 讀取 `skills/` 與 `recordings/` 中�
 
 Skill 自動保存會先清理自然語句，避免整句話直接變成檔名。例如 `/study 教我如何查詢物料` 會保存為 `skills/查詢物料.md`，同時保留原始查詢作為別名；之後輸入 `/study 查詢物料` 或 `/study 教我如何查詢物料` 都會命中同一份 skill。`/recordings` 也會依正規化名稱去重，避免同一流程重複顯示。
 
+Skill Library 會維護 `skills/_skill_index.json`，替每個 skill 建立 canonical name、tags、來源與檔案路徑。查詢 skill 時會綜合檔名、Markdown 標題、`Tags:` metadata、原始查詢別名與 SAP 關鍵詞做語意式匹配；例如 `查物料`、`教我查物料`、`查詢物料` 會對應到同一個 `查詢物料` skill。
+
 若工具執行中途被 Ctrl+C 或例外中斷，Copilot API 可能拒絕後續請求並回報 `assistant message with tool_calls must be followed by tool messages`。目前 Agent 會在送出下一次 API 前自動修復這類 dangling tool-call history；通常可直接重新輸入指令，不需要手動 `/reset`。
 
 Study Mode 預設採互動式參考引導流程；錄製值與錄製畫面不是絕對準則，而是提示使用者理解流程的參考資料：
@@ -272,6 +274,10 @@ Scanner 會將 SAP 畫面整理成 LLM 容易判斷的摘要：
 Auto Mode 每次工具執行後都會重新掃描並回傳 compact `screen_after`，避免畫面切換後仍使用舊的元件 ID。
 
 下拉式選單會使用 `select_combo()`，可依 option `key` 或顯示文字選取；`set_text()` 遇到 `GuiComboBox` 時也會自動改走下拉選取邏輯。
+
+Checkbox / radio 會使用 `read_checkbox()` / `set_checkbox()` 讀寫 `Selected` 狀態，不再把 `True` / `False` 當文字填入欄位。Scanner 的 `fields` 會將這類元件的 `value` 顯示為 `True` / `False`，並保留 `selected` 布林值，讓 Auto Mode 能先判斷目前狀態再決定是否切換。
+
+SAP `GuiTableControl` 內的 checkbox/列選取則使用 `select_table_row()`，例如 MM03「選擇檢視」彈窗中的「基本資料 1」。這類畫面常只掃到文字 cell，但實際勾選框藏在 table 選取欄內；Scanner 會在 `active_popup.tables` 列出可見 row，Agent 應呼叫 `select_table_row(row_text="基本資料 1")` 後再按 Enter 或 Continue。
 
 ABAP 原始碼編輯器通常是 `GuiAbapEditor` / `GuiShell`，不能假設可用一般 `.Text` 讀寫。Auto Mode 讀取程式碼會使用 `read_editor_text()`，優先走 `GetLineText` / `GetUnprotectedTextPart`；寫入程式碼會使用 `set_editor_text()`，優先走 `SelectAll + ReplaceSelection`、`SetSelectionIndexes + ReplaceSelection`、`SetUnprotectedTextPart`、`InsertText`，最後才用剪貼簿 fallback。Study Mode 預設仍會將程式碼內容輸入交給使用者手動完成。
 
