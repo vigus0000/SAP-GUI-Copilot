@@ -12,6 +12,7 @@ SAP GUI Copilot 是一個以 Python 打造的 SAP GUI 智慧助手，透過 COM 
 |------|------|
 | 🟣 **Auto Mode** | 用自然語言下指令，AI 自動操作 SAP 畫面（ReAct Loop：掃描 → 思考 → 執行 → 驗證） |
 | 🟢 **Ask Mode** | 結合當前畫面狀態的 Context-Aware 問答，回答「這格該填什麼」「為何報錯」 |
+| 🟡 **Solve Mode** | 專注當前錯誤、彈窗、狀態列與卡關情境，告訴使用者下一步如何處理；不執行操作 |
 | 🔴 **Record Mode** | 背景錄製使用者的 SAP 操作流程，自動產生 JSON 格式的 SOP 腳本 |
 | ▶ **Study Mode** | 使用 `/study [名稱或目標]` 讀取 SOP / Skill；若尚未錄製，會即席教學並保存成新 skill |
 | 🪟 **Popup-aware Scanner** | 可解析 SAP 多層彈窗、錯誤訊息、焦點欄位、下拉選單、Editor，以及 label ↔ input 對應 |
@@ -178,6 +179,7 @@ start.bat
 |------|------|
 | `/auto` | 切換至 🟣 Auto Mode — AI 可呼叫工具操作 SAP |
 | `/ask` | 切換至 🟢 Ask Mode — AI 只回答問題，不執行操作 |
+| `/solve` | 切換至 🟡 Solve Mode — AI 只診斷當前畫面/彈窗/錯誤並給處理建議，不執行操作 |
 
 ### 錄製管理
 
@@ -283,6 +285,8 @@ ABAP 原始碼編輯器通常是 `GuiAbapEditor` / `GuiShell`，不能假設可�
 
 Ask Mode 若偵測到目前畫面是 SE38/ABAP editor，會自動讀取 editor source 並放入 `editor_sources` context，因此可以直接詢問「這個程式是幹嘛的」。`EDITOR_CONTEXT_MAX_CHARS` 控制最多放入 LLM 的程式碼字元數。
 
+Solve Mode 是獨立的操作入口，但底層沿用 Ask Mode 的唯讀畫面掃描流程。差異在 prompt 與 context：`/ask` 適合一般問答與程式碼說明，`/solve` 會額外提供 `solve_diagnostics`，優先彙整 `active_popup`、`status_bar`、`messages`、table row、focused element 與需要注意的欄位。回答時會先列出實際讀到的錯誤/訊息，再判斷原因與建議處理；若畫面沒有錯誤清單，不應先猜常見修法，而是要求使用者先打開或展開錯誤清單。
+
 為避免 SAP GUI 將 ATC、Examples 等選單 `GuiShell` 誤判成程式碼 editor，`read_editor_text()` 會回傳 `looks_like_source`；Ask Mode 只會把看起來像 ABAP source 的內容交給 LLM，非 source 候選會以讀取失敗原因呈現。
 
 ---
@@ -297,7 +301,7 @@ SAP_Copilot/
 ├── copilot_auth.py      # GitHub Copilot OAuth 認證
 ├── sap_core.py          # SAP GUI COM 連線管理
 ├── sap_agent_tools.py   # 畫面掃描 (Scanner) + 操作工具 (Actor)
-├── llm_brain.py         # LLM Agent (ReAct Loop + Auto/Ask Mode)
+├── llm_brain.py         # LLM Agent (ReAct Loop + Auto/Ask/Solve Mode)
 ├── sap_monitor.py       # 背景 Polling 監控器
 ├── sap_recorder.py      # SOP 錄製管理器
 ├── sap_skill_library.py # Phase 3 SOP / Skill Library

@@ -12,6 +12,7 @@ SAP GUI Copilot — CLI 入口 (Phase 4 — Agentic Coach)
 - /play [名稱]  → 顯示指定 SOP 的操作步驟
 - /study [名稱或目標] → AI 教練引導執行 SOP；找不到時即席教學並保存 skill
 - /ask         → 切換到 Ask Mode（問答模式）
+- /solve       → 切換到 Solve Mode（問題排解模式）
 - /auto        → 切換回 Auto Mode（自動代操）
 - /quit        → 結束程式
 """
@@ -56,7 +57,7 @@ def print_banner():
     print(f"""
 {Colors.CYAN}╔══════════════════════════════════════════════════╗
 ║                                                  ║
-║   🤖 SAP GUI Copilot  V0.6.5  (Phase 4)         ║
+║   🤖 SAP GUI Copilot  V0.7.1  (Phase 4)         ║
 ║   ─────────────────────────────────────────────   ║
 ║   用自然語言操作 SAP，告別繁瑣的 T-Code！        ║
 ║                                                  ║
@@ -70,6 +71,7 @@ def print_banner():
     /play [名稱]    顯示指定 SOP 的操作步驟
     /study [名稱/目標] AI 教練引導；無 skill 時即席教學
     /ask           切換到 Ask Mode（問答模式）
+    /solve         切換到 Solve Mode（問題排解模式）
     /auto          切換回 Auto Mode（自動代操）
     /login         重新執行 GitHub Copilot 授權
     /reset         重置對話歷史
@@ -334,6 +336,8 @@ def get_mode_indicator(agent_mode, recorder):
         return f"{Colors.CYAN}📘 STUDY{Colors.RESET}"
     elif agent_mode == "ask":
         return f"{Colors.GREEN}🟢 ASK{Colors.RESET}"
+    elif agent_mode == "solve":
+        return f"{Colors.YELLOW}🟡 SOLVE{Colors.RESET}"
     else:
         return f"{Colors.MAGENTA}🟣 AUTO{Colors.RESET}"
 
@@ -615,6 +619,12 @@ def main():
                 print(f"{Colors.GREEN}  ✅ 已切換至 🟢 Ask Mode（問答模式）{Colors.RESET}")
                 print(f"{Colors.DIM}     AI 將根據當前畫面回答問題，不會執行任何操作{Colors.RESET}")
 
+            # --- /solve ---
+            elif cmd == "/solve":
+                agent.set_mode("solve")
+                print(f"{Colors.GREEN}  ✅ 已切換至 🟡 Solve Mode（問題排解模式）{Colors.RESET}")
+                print(f"{Colors.DIM}     AI 會根據當前畫面、彈窗與錯誤訊息告訴你如何處理，不會執行任何操作{Colors.RESET}")
+
             # --- /auto ---
             elif cmd == "/auto":
                 agent.set_mode("auto")
@@ -624,7 +634,7 @@ def main():
             # --- 未知指令 ---
             elif user_input.startswith("/"):
                 print(f"{Colors.YELLOW}  未知指令: {user_input}{Colors.RESET}")
-                print(f"{Colors.DIM}  可用指令: /scan, /record, /stop, /recordings, /play, /study, /ask, /auto, /login, /reset, /quit{Colors.RESET}")
+                print(f"{Colors.DIM}  可用指令: /scan, /record, /stop, /recordings, /play, /study, /ask, /solve, /auto, /login, /reset, /quit{Colors.RESET}")
 
             # ===== 自然語言指令 → AI Agent =====
             else:
@@ -636,9 +646,9 @@ def main():
 
                 print()
                 try:
-                    # 如果是 Ask Mode 且有錄製紀錄，附上最近的 SOP 摘要作為上下文
+                    # 如果是 Ask/Solve Mode 且有錄製紀錄，附上最近的 SOP 摘要作為上下文
                     extra_context = ""
-                    if agent.mode == "ask":
+                    if agent.mode in ("ask", "solve"):
                         recordings = skill_library.list_recordings()
                         if recordings:
                             # 附上最近一筆 SOP 的摘要

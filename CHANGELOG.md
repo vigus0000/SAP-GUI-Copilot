@@ -6,6 +6,25 @@
 
 ---
 
+## [0.7.1] - 2026-06-10
+
+#### Changed
+- **Solve Mode evidence-first 診斷**
+  - Solve Mode 送入 LLM 的畫面 context 新增 `solve_diagnostics`，會彙整狀態列、主視窗/彈窗訊息、表格列文字、目前焦點與需要注意的欄位。
+  - Solve prompt 改為先列出實際讀到的錯誤/訊息，再做原因判斷與處理建議；若畫面沒有錯誤清單，會要求使用者先打開或展開錯誤清單，而不是先猜常見 ABAP 修法。
+  - 改善 Activate / Syntax Check 失敗時容易根據程式碼片段推測問題、未先讀完整錯誤清單的情況。
+
+## [0.7.0] - 2026-06-09
+
+#### Added
+- **Solve Mode 問題排解入口**
+  - 新增 `/solve`，作為獨立模式入口，專門用來判讀當前 SAP 畫面、彈窗、狀態列錯誤、必填欄位與卡關情境。
+  - Solve Mode 底層沿用 Ask Mode 的唯讀掃描流程，不呼叫 SAP 操作工具；差異在 system prompt 會優先輸出「目前判斷」與「建議處理」。
+  - CLI mode indicator 新增 `🟡 SOLVE`，未知指令提示與 README 指令表同步補上 `/solve`。
+
+#### Design
+- 以操作方便性來看，Solve Mode 保持獨立入口較合適：使用者遇到錯誤時可直接 `/solve`，不用在 Ask Mode 額外描述「請幫我排錯」；程式實作仍與 Ask Mode 共用掃描管線，避免增加操作風險與維護成本。
+
 ## [0.6.5] - 2026-06-08
 
 #### Added

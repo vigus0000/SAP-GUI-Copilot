@@ -121,6 +121,29 @@ SYSTEM_PROMPT_ASK = """你是一個專業的 SAP GUI 問答助手。你**只回�
 - 常見欄位: VBELN=單號, MATNR=物料, BUKRS=公司代碼, WERKS=工廠
 """
 
+# System Prompt - Solve Mode (問題排解：只診斷，不操作)
+SYSTEM_PROMPT_SOLVE = """你是一個專業的 SAP GUI 問題排解助手。你只根據目前 SAP 畫面與使用者描述，告訴使用者當下應該如何處理；你絕對不執行任何 SAP 操作，也不呼叫工具。
+
+## 任務目標
+1. 先完整閱讀目前畫面 JSON 的 `solve_diagnostics`、active_popup、status_bar、messages、tables、fields、focused_element、editor_sources。
+2. 先整理「實際讀到的錯誤/警告/提示訊息」，再根據這些訊息判斷原因；不要先猜常見問題。
+3. 給出可立即照做的處理步驟，優先說明「現在先做什麼」，再說明原因。
+4. 若資訊不足，只問一個最關鍵的確認問題，並明確說明目前缺少哪個錯誤訊息或畫面證據。
+
+## 回答規則
+- 使用繁體中文，簡潔、具體、可操作。
+- 回答必須先給「讀到的錯誤/訊息」，再給「目前判斷」，最後給「建議處理」。
+- 如果 `solve_diagnostics.messages` 或 table rows 有多筆錯誤，必須先逐條列出或分組歸納，再判斷優先修正順序。
+- 不要在沒有實際錯誤訊息佐證時提出具體程式碼修法；可以說「目前畫面未提供足夠錯誤文字，請先打開/展開錯誤清單」。
+- 若使用者提到 ABAP Activate / Syntax Check 失敗，必須先尋找語法錯誤清單、狀態列錯誤、彈窗訊息或 table row。只有在讀到實際錯誤文字後，才給出對應 ABAP 修法。
+- 若有 active_popup，優先說明彈窗標題、錯誤/提示文字、必填欄位、可按的按鈕，並建議使用者如何填寫或關閉。
+- 若 status_bar type 是 E/W/A，先引用狀態列原文，再說要修正哪個欄位或回到哪個畫面。
+- 若畫面有紅框必填欄位，指出欄位 label、目前值與建議輸入內容；不要只回技術 ID。
+- 若畫面是 SE38/ABAP editor 且 editor_sources 可用，可以根據程式碼協助排查；若無 source，不要猜測程式功能。
+- 若問題涉及資料修改、刪除、過帳、啟用、儲存或送出，提醒使用者確認環境與資料正確性。
+- 不要說你可以幫使用者點擊或輸入；Solve Mode 只提供處理建議。
+"""
+
 # System Prompt - Study Mode (Agentic 教練：只能引導，不能寫入)
 SYSTEM_PROMPT_STUDY = """你是一個 SAP GUI 操作教練。你的任務是根據提供的 SOP 指南或使用者的學習目標，一步一步引導使用者完成 SAP 操作。
 
@@ -188,14 +211,14 @@ class SAPAgent:
         """
         self.auth = auth
         self.model = model
-        self._mode = "auto"  # "auto" 或 "ask"
+        self._mode = "auto"  # "auto", "ask", "solve", or "study"
         self.conversation_history = [
             {"role": "system", "content": SYSTEM_PROMPT_AUTO}
         ]
 
     @property
     def mode(self):
-        """當前模式: 'auto' 或 'ask'"""
+        """當前模式: 'auto', 'ask', 'solve' 或 'study'"""
         return self._mode
 
     def set_mode(self, mode: str):
@@ -203,17 +226,27 @@ class SAPAgent:
         切換 Agent 模式。
 
         Args:
-            mode: 'auto', 'ask' 或 'study'
+            mode: 'auto', 'ask', 'solve' 或 'study'
         """
-        if mode not in ("auto", "ask", "study"):
-            raise ValueError(f"不支援的模式: {mode}，請使用 'auto', 'ask' 或 'study'")
+        if mode not in ("auto", "ask", "solve", "study"):
+            raise ValueError(f"不支援的模式: {mode}，請使用 'auto', 'ask', 'solve' 或 'study'")
 
         self._mode = mode
-        prompt = {"auto": SYSTEM_PROMPT_AUTO, "ask": SYSTEM_PROMPT_ASK, "study": SYSTEM_PROMPT_STUDY}[mode]
+        prompt = {
+            "auto": SYSTEM_PROMPT_AUTO,
+            "ask": SYSTEM_PROMPT_ASK,
+            "solve": SYSTEM_PROMPT_SOLVE,
+            "study": SYSTEM_PROMPT_STUDY,
+        }[mode]
         self.conversation_history = [
             {"role": "system", "content": prompt}
         ]
-        mode_names = {"auto": "🟣 Auto Mode（自動代操）", "ask": "🟢 Ask Mode（問答模式）", "study": "📘 Study Mode（教練引導）"}
+        mode_names = {
+            "auto": "🟣 Auto Mode（自動代操）",
+            "ask": "🟢 Ask Mode（問答模式）",
+            "solve": "🟡 Solve Mode（問題排解）",
+            "study": "📘 Study Mode（教練引導）",
+        }
         print(f"\033[90m[Agent] 已切換至 {mode_names[mode]}\033[0m")
 
     def _call_copilot_api(self, messages, tools=None):
@@ -383,6 +416,141 @@ class SAPAgent:
                 "element_count": len(active_popup.get("elements", [])),
             } if active_popup else None,
             "element_count": len(screen_state.get("elements", [])),
+        }
+
+    def _solve_context(self, screen_state):
+        """Solve Mode context keeps diagnostic evidence before giving advice."""
+        context = self._screen_summary(screen_state)
+        context["solve_diagnostics"] = self._build_solve_diagnostics(screen_state)
+        return context
+
+    def _build_solve_diagnostics(self, screen_state):
+        active_popup = screen_state.get("active_popup") or {}
+        status_bar = screen_state.get("status_bar") or {}
+        focused_element = active_popup.get("focused_element") or screen_state.get("focused_element")
+
+        messages = []
+        seen_messages = set()
+
+        def add_message(source, item):
+            if not item:
+                return
+            if isinstance(item, str):
+                text = item.strip()
+                msg = {"source": source, "text": text}
+            else:
+                text = str(item.get("text") or item.get("message") or "").strip()
+                msg = {
+                    "source": source,
+                    "text": text,
+                    "id": item.get("id", ""),
+                    "type": item.get("type", ""),
+                }
+                if item.get("position"):
+                    msg["position"] = item.get("position")
+            if not text:
+                return
+            key = (source, text)
+            if key in seen_messages:
+                return
+            seen_messages.add(key)
+            messages.append(msg)
+
+        if status_bar.get("text"):
+            messages.append({
+                "source": "status_bar",
+                "text": status_bar.get("text", ""),
+                "severity": status_bar.get("type", ""),
+            })
+            seen_messages.add(("status_bar", status_bar.get("text", "")))
+
+        for item in screen_state.get("messages", []):
+            add_message("main_window", item)
+        for item in active_popup.get("messages", []):
+            add_message("active_popup", item)
+
+        table_evidence = []
+
+        def add_tables(source, tables):
+            for table in tables[:6]:
+                rows = []
+                for row in table.get("rows", [])[:80]:
+                    cells = row.get("cells", [])[:12]
+                    text = str(row.get("text") or "").strip()
+                    if not text:
+                        text = " | ".join(
+                            str(cell.get("text", "")).strip()
+                            for cell in cells
+                            if str(cell.get("text", "")).strip()
+                        )
+                    if not text and not cells:
+                        continue
+                    rows.append({
+                        "row": row.get("row"),
+                        "text": text,
+                        "cells": cells,
+                    })
+                if rows:
+                    table_evidence.append({
+                        "source": source,
+                        "id": table.get("id", ""),
+                        "row_count": len(table.get("rows", [])),
+                        "rows": rows,
+                    })
+
+        add_tables("main_window", screen_state.get("tables", []))
+        add_tables("active_popup", active_popup.get("tables", []))
+
+        fields_need_attention = []
+        focus_id = focused_element.get("id") if isinstance(focused_element, dict) else ""
+
+        def truthy(value):
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                return value.strip().lower() in {"true", "x", "1", "yes", "y"}
+            return bool(value)
+
+        def add_fields(source, fields):
+            for field in fields[:80]:
+                value = str(field.get("value", "") or "")
+                field_id = field.get("id", "")
+                is_required = truthy(field.get("required"))
+                is_focused = bool(focus_id and field_id == focus_id)
+                is_empty_input = (
+                    truthy(field.get("changeable"))
+                    and not value.strip()
+                    and any(kind in str(field.get("type", "")) for kind in ("TextField", "CTextField", "ComboBox"))
+                )
+                if not (is_required or is_focused or is_empty_input):
+                    continue
+                fields_need_attention.append({
+                    "source": source,
+                    "id": field_id,
+                    "label": field.get("label") or field.get("name") or field.get("text") or "",
+                    "type": field.get("type", ""),
+                    "value": value,
+                    "required": is_required,
+                    "focused": is_focused,
+                    "changeable": truthy(field.get("changeable")),
+                })
+
+        add_fields("main_window", screen_state.get("fields", []))
+        add_fields("active_popup", active_popup.get("fields", []))
+
+        return {
+            "evidence_first": True,
+            "status_bar": status_bar,
+            "active_popup_title": active_popup.get("title", ""),
+            "message_count": len(messages),
+            "messages": messages[:80],
+            "tables": table_evidence,
+            "fields_need_attention": fields_need_attention[:40],
+            "focused_element": focused_element,
+            "instruction": (
+                "先根據 messages、tables.rows 與 status_bar 的實際文字判斷；"
+                "若這裡沒有錯誤文字，不要猜測修法，請要求使用者先打開或展開錯誤清單。"
+            ),
         }
 
     def _compact_fields(self, fields, max_fields=20, max_options=12):
@@ -625,7 +793,7 @@ class SAPAgent:
         Returns:
             str: AI 的最終回應文字
         """
-        if self._mode == "ask":
+        if self._mode in ("ask", "solve"):
             return self._process_ask(session, user_message, extra_context)
         elif self._mode == "study":
             return self._process_study(session, user_message, extra_context)
@@ -640,7 +808,8 @@ class SAPAgent:
         print("\033[90m[Agent] 正在掃描 SAP 畫面...\033[0m")
         screen_state = scan_sap_screen(session)
         screen_state = self._attach_editor_text_context(session, screen_state)
-        screen_json = json.dumps(self._screen_context(screen_state), ensure_ascii=False, indent=2)
+        context = self._solve_context(screen_state) if self._mode == "solve" else self._screen_context(screen_state)
+        screen_json = json.dumps(context, ensure_ascii=False, indent=2)
 
         # 組合訊息
         combined_parts = [
@@ -946,7 +1115,12 @@ class SAPAgent:
 
     def reset_conversation(self):
         """重置對話歷史（保持當前模式）"""
-        prompt = {"auto": SYSTEM_PROMPT_AUTO, "ask": SYSTEM_PROMPT_ASK, "study": SYSTEM_PROMPT_STUDY}.get(self._mode, SYSTEM_PROMPT_AUTO)
+        prompt = {
+            "auto": SYSTEM_PROMPT_AUTO,
+            "ask": SYSTEM_PROMPT_ASK,
+            "solve": SYSTEM_PROMPT_SOLVE,
+            "study": SYSTEM_PROMPT_STUDY,
+        }.get(self._mode, SYSTEM_PROMPT_AUTO)
         self.conversation_history = [
             {"role": "system", "content": prompt}
         ]
