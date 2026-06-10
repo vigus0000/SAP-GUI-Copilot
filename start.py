@@ -20,6 +20,7 @@ from sap_core import SAPConnection
 ROOT = Path(__file__).resolve().parent
 SAP_LOGIN_SCRIPT = ROOT / "sap_login.py"
 MAIN_SCRIPT = ROOT / "main.py"
+UI_SCRIPT = ROOT / "ui_app.py"
 
 
 def _run_python(script: Path) -> int:
@@ -86,13 +87,16 @@ def ensure_copilot_login() -> bool:
 
 
 def main() -> int:
+    use_ui = any(arg.lower() in {"--ui", "ui", "/ui"} for arg in sys.argv[1:])
+
     if not ensure_sap_login():
         return 1
     if not ensure_copilot_login():
         return 1
 
-    print("[Start] 登入檢查完成，啟動 main.py")
-    return _run_python(MAIN_SCRIPT)
+    target = UI_SCRIPT if use_ui else MAIN_SCRIPT
+    print(f"[Start] 登入檢查完成，啟動 {target.name}")
+    return _run_python(target)
 
 
 if __name__ == "__main__":

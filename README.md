@@ -14,7 +14,7 @@ SAP GUI Copilot 是一個以 Python 打造的 SAP GUI 智慧助手，透過 COM 
 | 🟢 **Ask Mode** | 結合當前畫面狀態的 Context-Aware 問答，回答「這格該填什麼」「為何報錯」 |
 | 🟡 **Solve Mode** | 專注當前錯誤、彈窗、狀態列與卡關情境，告訴使用者下一步如何處理；不執行操作 |
 | 🔴 **Record Mode** | 背景錄製使用者的 SAP 操作流程，自動產生 JSON 格式的 SOP 腳本 |
-| ▶ **Study Mode** | 使用 `/study [名稱或目標]` 讀取 SOP / Skill；若尚未錄製，會即席教學並保存成新 skill |
+| ▶ **Study Mode** | 使用 `/study [名稱]` 讀取既有 SOP / Skill；若無錄製依據會預設停止，需明確 `--draft` 才啟動探索草稿 |
 | 🪟 **Popup-aware Scanner** | 可解析 SAP 多層彈窗、錯誤訊息、焦點欄位、下拉選單、Editor，以及 label ↔ input 對應 |
 | 🔁 **畫面切換自癒** | 每次工具操作後重新掃描 SAP，避免沿用舊畫面元件 ID |
 | 🔒 **Human-in-the-loop** | 敏感操作（儲存、刪除、過帳）強制人工確認，杜絕 AI 寫入錯誤資料 |
@@ -122,6 +122,8 @@ STUDY_SCREEN_CHANGE_POLL_SECONDS=0.5
 STUDY_PROMPT_FIELD_VALUES=true
 STUDY_AUTOFILL_PROMPTED_VALUES=false
 STUDY_INITIAL_TCODES=SESSION_MANAGER,S000
+STUDY_ALLOW_DRAFT=false
+STUDY_SAVE_DRAFT_SKILL=false
 ```
 
 #### Copilot 模型建議
@@ -153,11 +155,17 @@ STUDY_INITIAL_TCODES=SESSION_MANAGER,S000
 # 推薦：先檢查 SAP / Copilot 登入，再啟動主程式
 python start.py
 
+# Phase 4 UI：啟動懸浮控制台
+python start.py --ui
+
 # Windows 也可直接執行
 start.bat
+
+# Windows UI 批次檔
+start_ui.bat
 ```
 
-`start.py` 會先確認 SAP GUI 是否已登入；若尚未登入，會執行 `sap_login.py`。接著檢查 GitHub Copilot 授權，完成後啟動 `main.py`。首次啟動時，程式會顯示 GitHub Device Flow 授權碼，在瀏覽器中完成授權後即可使用。
+`start.py` 會先確認 SAP GUI 是否已登入；若尚未登入，會執行 `sap_login.py`。接著檢查 GitHub Copilot 授權，完成後預設啟動 `main.py`。若使用 `--ui`，則啟動 `ui_app.py` 的 Tkinter 懸浮控制台。首次啟動時，程式會顯示 GitHub Device Flow 授權碼，在瀏覽器中完成授權後即可使用。
 
 ---
 
@@ -189,7 +197,9 @@ start.bat
 | `/stop` | 停止錄製並儲存 SOP 檔案 |
 | `/recordings` | 列出所有 SOP / Skill（`skills/` 優先，其次 `recordings/`） |
 | `/play [名稱]` | 顯示指定 SOP / Skill 的完整操作步驟 |
-| `/study [名稱或目標]` | 執行指定 SOP / Skill；若找不到同名 skill，會啟動即席教學並自動保存為新的 Markdown skill |
+| `/study [名稱]` | 執行指定 SOP / Skill，找不到時預設停止，避免沒有錄製依據時亂教 |
+| `/study --draft [目標]` | 明確啟動探索草稿；AI 只能依目前 SAP 畫面與使用者確認引導，不會自動保存 |
+| `/study --save-draft [目標]` | 明確啟動探索草稿，完成後保存為 Markdown skill 草稿 |
 
 Record Mode 使用 polling snapshot diff，不依賴不穩定的 SAP COM events。監控器會在背景 thread 內重新取得 SAP session，並偵測：
 
@@ -207,9 +217,11 @@ Record Mode 使用 polling snapshot diff，不依賴不穩定的 SAP COM events�
 
 Study Mode 透過 `sap_skill_library.py` 讀取 `skills/` 與 `recordings/` 中的 SOP，並以其內容作為互動式引導參考。若兩邊有同名項目，`skills/` 會優先，適合放置整理後的穩定教學流程。
 
-若 `/study [名稱或目標]` 找不到既有 SOP / Skill，系統會啟動即席 Study Mode：AI 教練會依目前 SAP 畫面與 SAP 常識推斷流程、逐步高亮引導使用者操作，完成後自動將本次教學紀錄成 `skills/[名稱].md`。下次使用同一個 `/study` 指令時，就會直接讀取該 skill 作為參考。
+若 `/study [名稱]` 找不到既有 SOP / Skill，系統預設不會啟動教學，避免 AI 在沒有錄製依據時把推測當成流程。建議先使用 `/record [名稱]` 錄製一次真實操作，或用 `/solve` 針對當前畫面卡關取得處理建議。
 
-Skill 自動保存會先清理自然語句，避免整句話直接變成檔名。例如 `/study 教我如何查詢物料` 會保存為 `skills/查詢物料.md`，同時保留原始查詢作為別名；之後輸入 `/study 查詢物料` 或 `/study 教我如何查詢物料` 都會命中同一份 skill。`/recordings` 也會依正規化名稱去重，避免同一流程重複顯示。
+若只是要探索未知流程，必須明確使用 `/study --draft [目標]`。草稿模式會先標示不確定性，只依目前 SAP 畫面、狀態列、彈窗、可見欄位與使用者確認引導，不會把候選 T-Code 或 SAP 常識說成已驗證事實，也不會自動保存。若確定要把探索結果留作草稿 skill，可使用 `/study --save-draft [目標]`，或在 `.env` 設定 `STUDY_SAVE_DRAFT_SKILL=true`。
+
+Skill 草稿保存會先清理自然語句，避免整句話直接變成檔名。例如 `/study --save-draft 教我如何查詢物料` 會保存為 `skills/查詢物料.md`，同時保留原始查詢作為別名；之後輸入 `/study 查詢物料` 或 `/study 教我如何查詢物料` 都會命中同一份 skill。`/recordings` 也會依正規化名稱去重，避免同一流程重複顯示。
 
 Skill Library 會維護 `skills/_skill_index.json`，替每個 skill 建立 canonical name、tags、來源與檔案路徑。查詢 skill 時會綜合檔名、Markdown 標題、`Tags:` metadata、原始查詢別名與 SAP 關鍵詞做語意式匹配；例如 `查物料`、`教我查物料`、`查詢物料` 會對應到同一個 `查詢物料` skill。
 
@@ -296,8 +308,10 @@ Solve Mode 是獨立的操作入口，但底層沿用 Ask Mode 的唯讀畫面�
 ```
 SAP_Copilot/
 ├── main.py              # CLI 入口 (REPL 互動介面)
-├── start.py             # 啟動器：確認 SAP / Copilot 登入後啟動 main.py
+├── ui_app.py            # Phase 4 Tkinter 懸浮控制台
+├── start.py             # 啟動器：確認 SAP / Copilot 登入後啟動 CLI 或 UI
 ├── start.bat            # Windows 啟動批次檔
+├── start_ui.bat         # Windows UI 啟動批次檔
 ├── copilot_auth.py      # GitHub Copilot OAuth 認證
 ├── sap_core.py          # SAP GUI COM 連線管理
 ├── sap_agent_tools.py   # 畫面掃描 (Scanner) + 操作工具 (Actor)
@@ -369,7 +383,7 @@ COPILOT_RETRY_MAX_SECONDS=90
 - [x] **Phase 1** — 基礎建設與 Auto Mode 雛形 (CLI)
 - [x] **Phase 2** — 監控系統與 Record / Ask Mode
 - [x] **Phase 3** — 視覺化引導與 Study Mode（`.Visualize(True)` 高亮 + Skill Library + Guided Recovery）
-- [ ] **Phase 4** — UI 整合與最終封裝（PyQt6 / CustomTkinter 懸浮對話框）
+- [x] **Phase 4** — UI 整合與最終封裝（Tkinter 懸浮控制台 + CLI fallback）
 
 ---
 

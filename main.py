@@ -10,7 +10,7 @@ SAP GUI Copilot — CLI 入口 (Phase 4 — Agentic Coach)
 - /stop        → 停止錄製，AI 生成自然語言 SOP
 - /recordings  → 列出所有已錄製的 SOP
 - /play [名稱]  → 顯示指定 SOP 的操作步驟
-- /study [名稱或目標] → AI 教練引導執行 SOP；找不到時即席教學並保存 skill
+- /study [名稱]  → AI 教練引導執行既有 SOP / Skill
 - /ask         → 切換到 Ask Mode（問答模式）
 - /solve       → 切換到 Solve Mode（問題排解模式）
 - /auto        → 切換回 Auto Mode（自動代操）
@@ -30,6 +30,31 @@ from llm_brain import SAPAgent
 from sap_monitor import SAPMonitor
 from sap_recorder import SAPRecorder
 from sap_skill_library import SAPSkillLibrary
+
+
+def env_enabled(name, default="false"):
+    return str(os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def parse_study_request(raw_text):
+    text = str(raw_text or "").strip()
+    allow_draft = env_enabled("STUDY_ALLOW_DRAFT", "false")
+    save_draft = env_enabled("STUDY_SAVE_DRAFT_SKILL", "false")
+
+    tokens = text.split()
+    cleaned = []
+    for token in tokens:
+        lowered = token.lower()
+        if lowered in {"--draft", "/draft", "--explore", "/explore"}:
+            allow_draft = True
+            continue
+        if lowered in {"--save-draft", "/save-draft"}:
+            allow_draft = True
+            save_draft = True
+            continue
+        cleaned.append(token)
+
+    return " ".join(cleaned).strip(), allow_draft, save_draft
 
 
 
@@ -57,7 +82,7 @@ def print_banner():
     print(f"""
 {Colors.CYAN}╔══════════════════════════════════════════════════╗
 ║                                                  ║
-║   🤖 SAP GUI Copilot  V0.7.1  (Phase 4)         ║
+║   🤖 SAP GUI Copilot  V0.8.1  (Phase 4)         ║
 ║   ─────────────────────────────────────────────   ║
 ║   用自然語言操作 SAP，告別繁瑣的 T-Code！        ║
 ║                                                  ║
@@ -69,7 +94,7 @@ def print_banner():
     /stop          停止錄製
     /recordings    列出所有已錄製的 SOP
     /play [名稱]    顯示指定 SOP 的操作步驟
-    /study [名稱/目標] AI 教練引導；無 skill 時即席教學
+    /study [名稱]   AI 教練引導既有 SOP；--draft 才啟動探索草稿
     /ask           切換到 Ask Mode（問答模式）
     /solve         切換到 Solve Mode（問題排解模式）
     /auto          切換回 Auto Mode（自動代操）
@@ -209,7 +234,8 @@ def print_recordings_list(skill_library):
         print()
 
     print(f"  {Colors.DIM}{'─' * 70}{Colors.RESET}")
-    print(f"  {Colors.DIM}使用 /play [名稱] 檢視步驟，或 /study [名稱/目標] 啟動教練引導{Colors.RESET}\n")
+    print(f"  {Colors.DIM}使用 /play [名稱] 檢視步驟，或 /study [名稱] 啟動教練引導{Colors.RESET}")
+    print(f"  {Colors.DIM}若無錄製依據但需探索，請明確使用 /study --draft [目標]{Colors.RESET}\n")
 
 
 def print_recording_steps(skill_library, name):
@@ -251,7 +277,7 @@ def build_ad_hoc_study_context(goal, screen_state):
     return f"""# 即席 Study 任務: {goal}
 
 ## 狀態
-目前沒有同名 SOP / skill。請把這次任務當成探索式教學，而不是既有錄製流程。
+目前沒有同名 SOP / skill。這是使用者明確要求的探索草稿，不是正式 SOP，也不是已驗證流程。
 
 ## 教學目標
 {goal}
@@ -260,12 +286,14 @@ def build_ad_hoc_study_context(goal, screen_state):
 {_screen_brief(screen_state)}
 
 ## 教練要求
-- 依照目前 SAP 畫面與 SAP 常識判斷下一步。
-- 如果需要 T-Code，請先引導使用者在 T-Code 欄位輸入最可能的交易代碼；例如查詢物料通常可能是 MM03 或相關查詢交易，但仍要依畫面狀態修正。
+- 先明確告知使用者：目前沒有錄製依據，以下內容只能作為探索草稿。
+- 只能依目前 SAP 畫面、狀態列、彈窗、可見欄位與使用者回覆判斷下一步；不要把 SAP 常識推測說成已確認事實。
+- 如果不確定 T-Code、欄位位置、資料意義或下一步，請先問使用者或建議改用 `/record` 錄製一次正式流程。
+- 如果需要 T-Code，可以提出候選交易代碼，但必須標示為「候選」並請使用者確認。
 - 每次只引導一個步驟，優先使用 `guide_user_action` 高亮欄位或按鈕。
 - 不要替使用者寫入資料；由使用者在 SAP GUI 操作後確認。
-- 若資訊不足，先提出最小必要問題或引導使用者確認目前畫面。
-- 完成本次教學後，請輸出一段可被下次 `/study` 重用的簡短 SOP 摘要。
+- 若資訊不足，先提出最小必要問題或引導使用者確認目前畫面，不要硬猜。
+- 完成本次教學後，請輸出一段「草稿」摘要，並列出哪些步驟仍需要錄製或人工驗證。
 """
 
 
@@ -297,7 +325,7 @@ def build_learned_skill_markdown(name, response, guidance_steps, initial_screen)
         f"# SOP: {name}",
         "",
         "## 目的",
-        f"引導使用者完成「{name}」。此 skill 由 `/study` 在沒有既有 SOP 時自動建立，屬於可持續修正的教學草稿。",
+        f"引導使用者完成「{name}」。此 skill 由 `/study --save-draft` 探索草稿保存而來，仍需依實際 SAP 操作驗證。",
         "",
         "## 初始畫面參考",
         _screen_brief(initial_screen),
@@ -529,7 +557,7 @@ def main():
                 sop_name = parts[1].strip()
                 print_recording_steps(skill_library, sop_name)
 
-            # --- /study [名稱或目標] ---
+            # --- /study [名稱] ---
             elif cmd == "/study" or cmd.startswith("/study "):
                 if recorder.is_recording:
                     print(f"{Colors.YELLOW}  請先 /stop 結束錄製，再執行 /study{Colors.RESET}")
@@ -537,11 +565,18 @@ def main():
 
                 parts = user_input.split(maxsplit=1)
                 if len(parts) < 2 or not parts[1].strip():
-                    print(f"{Colors.YELLOW}  用法: /study [SOP名稱或教學目標]{Colors.RESET}")
+                    print(f"{Colors.YELLOW}  用法: /study [SOP名稱]{Colors.RESET}")
+                    print(f"{Colors.DIM}       /study --draft [教學目標]      明確啟動探索草稿，不保存 skill{Colors.RESET}")
+                    print(f"{Colors.DIM}       /study --save-draft [教學目標] 明確啟動探索草稿並保存為 skill{Colors.RESET}")
                     print(f"{Colors.DIM}  使用 /recordings 查看所有錄製{Colors.RESET}")
                     continue
 
-                sop_name = parts[1].strip()
+                sop_name, allow_draft_study, save_draft_skill = parse_study_request(parts[1].strip())
+                if not sop_name:
+                    print(f"{Colors.YELLOW}  用法: /study [SOP名稱]{Colors.RESET}")
+                    print(f"{Colors.DIM}       /study --draft [教學目標]      明確啟動探索草稿，不保存 skill{Colors.RESET}")
+                    print(f"{Colors.DIM}       /study --save-draft [教學目標] 明確啟動探索草稿並保存為 skill{Colors.RESET}")
+                    continue
                 canonical_sop_name = skill_library.canonical_skill_name(sop_name)
 
                 # 讀取 SOP（優先 .md，退回 .json）
@@ -553,9 +588,21 @@ def main():
                     skill_found = False
                     skill_data = {}
                     print(f"\n{Colors.YELLOW}  找不到 SOP / skill: '{sop_name}'{Colors.RESET}")
-                    print(f"{Colors.DIM}  將啟動即席 Study Mode，依目前 SAP 畫面與 SAP 常識教學，完成後自動記錄為 skill。{Colors.RESET}\n")
+                    if not allow_draft_study:
+                        print(f"{Colors.YELLOW}  為避免 Study Mode 在沒有錄製依據時亂教，已停止啟動。{Colors.RESET}")
+                        print(f"{Colors.DIM}  建議做法:{Colors.RESET}")
+                        print(f"{Colors.DIM}    1. 使用 /record [名稱] 錄製一次真實流程{Colors.RESET}")
+                        print(f"{Colors.DIM}    2. 使用 /solve 描述目前卡關畫面，取得排錯建議{Colors.RESET}")
+                        print(f"{Colors.DIM}    3. 若只是探索草稿，請明確使用 /study --draft [目標]{Colors.RESET}")
+                        print(f"{Colors.DIM}       若要保存探索草稿，使用 /study --save-draft [目標]{Colors.RESET}\n")
+                        continue
+                    print(f"{Colors.DIM}  已啟動探索草稿模式；AI 只能依目前畫面與使用者確認引導，不會視為正式 SOP。{Colors.RESET}")
+                    if save_draft_skill:
+                        print(f"{Colors.DIM}  本次完成後會保存為 skill 草稿。{Colors.RESET}\n")
+                    else:
+                        print(f"{Colors.DIM}  本次不會自動保存；確認流程後建議用 /record 建立正式 SOP。{Colors.RESET}\n")
                     if canonical_sop_name != sop_name:
-                        print(f"{Colors.DIM}  保存名稱將正規化為: {canonical_sop_name}{Colors.RESET}\n")
+                        print(f"{Colors.DIM}  正規化名稱: {canonical_sop_name}{Colors.RESET}\n")
                     try:
                         session = sap.get_session()
                         initial_screen = scan_sap_screen(session)
@@ -580,7 +627,7 @@ def main():
                 if skill_found:
                     print(f"{Colors.DIM}  AI 教練將根據 SOP 一步步引導你操作 SAP{Colors.RESET}\n")
                 else:
-                    print(f"{Colors.DIM}  AI 教練將先探索教學；本次引導會保存為新的 skill 草稿{Colors.RESET}\n")
+                    print(f"{Colors.DIM}  AI 教練將以探索草稿方式引導；請把每一步視為待確認建議{Colors.RESET}\n")
 
                 # 切換到 Study Mode 並啟動 ReAct Loop
                 agent.set_mode("study")
@@ -593,7 +640,7 @@ def main():
                         extra_context=sop_text,
                     )
                     print(f"\n{Colors.MAGENTA}  AI > {Colors.RESET}{response}\n")
-                    if not skill_found:
+                    if not skill_found and save_draft_skill:
                         guidance_steps = extract_study_guidance_steps(agent)
                         learned_markdown = build_learned_skill_markdown(
                             canonical_sop_name,
@@ -602,8 +649,11 @@ def main():
                             initial_screen,
                         )
                         saved_path = skill_library.save_markdown_skill(sop_name, learned_markdown)
-                        print(f"{Colors.GREEN}  ✅ 已將本次即席教學記錄為 skill: {saved_path}{Colors.RESET}")
+                        print(f"{Colors.GREEN}  ✅ 已將本次探索草稿記錄為 skill: {saved_path}{Colors.RESET}")
                         print(f"{Colors.DIM}     下次可直接使用 /study {canonical_sop_name}，或沿用原本說法 /study {sop_name}{Colors.RESET}\n")
+                    elif not skill_found:
+                        print(f"{Colors.YELLOW}  草稿教學未保存為 skill。確認流程正確後，建議用 /record 建立正式 SOP。{Colors.RESET}")
+                        print(f"{Colors.DIM}     若仍要保存探索結果，請下次使用 /study --save-draft {sop_name}{Colors.RESET}\n")
                 except ConnectionError as e:
                     print(f"{Colors.RED}  SAP 連線已斷開: {e}{Colors.RESET}")
                 except Exception as e:

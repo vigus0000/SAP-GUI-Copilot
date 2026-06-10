@@ -16,7 +16,7 @@
 * **語言**：Python 3.10+
 * **核心依賴**：`pywin32` (控制 SAP GUI COM Interface), `pythoncom` (處理背景事件監聽)
 * **AI/LLM 框架**：OpenAI SDK / LangChain / LangGraph (用於 Agent 流程控制)
-* **前端介面 (預計 Phase 3 導入)**：`PyQt6` 或 `CustomTkinter` (開發懸浮於 SAP 旁邊的對話框)
+* **前端介面 (Phase 4)**：標準庫 `tkinter` (開發懸浮於 SAP 旁邊的對話框，避免新增安裝負擔)
 
 ### 系統模組架構
 1. **SAP Connector (`sap_core.py`)**：負責管理 SAP Session 連線、錯誤處理。
@@ -81,10 +81,11 @@
 * [x] Study Mode 改為互動式參考引導：錄製 SOP 只作為流程、欄位與參考值來源，不再作為絕對操作準則。
 * [x] **目標驗證**：啟動教學模式，SAP 畫面上的特定欄位能依序閃爍並提示使用者輸入。
 
-### 🏁 Phase 4: UI 整合與最終封裝
-* [ ] 使用 PyQt6 / CustomTkinter 建立一個極簡的懸浮對話框。
-* [ ] 實作「貼齊 SAP 視窗邊緣」的功能。
-* [ ] 將四大模式整合至 UI 切換。
+### 🏁 Phase 4: UI 整合與最終封裝 (v0.8.0 完成)
+* [x] 使用標準庫 Tkinter 建立一個極簡懸浮對話框，避免新增 PyQt6 / CustomTkinter 安裝負擔。
+* [x] 實作 always-on-top 懸浮視窗、狀態列、訊息輸入區與即時 log 區。
+* [x] 將 Auto / Ask / Solve / Study、Scan、Reset、Record / Stop、SOP 清單整合至 UI 操作。
+* [x] 新增 `python start.py --ui` 與 `start_ui.bat` 作為 UI 啟動入口；原 `start.bat` 保留 CLI 行為。
 
 ---
 

@@ -6,6 +6,32 @@
 
 ---
 
+## [0.8.1] - 2026-06-10
+
+#### Changed
+- **Study Mode 無錄製依據保護**
+  - `/study [名稱]` 找不到既有 SOP / Skill 時，預設不再啟動即席教學，避免 AI 在沒有錄製依據時把推測當成流程。
+  - 新增明確草稿入口：`/study --draft [目標]` 只做探索式引導，不自動保存；`/study --save-draft [目標]` 才會保存為 skill 草稿。
+  - 新增 `.env` 控制：`STUDY_ALLOW_DRAFT` 與 `STUDY_SAVE_DRAFT_SKILL`，預設皆為 `false`。
+  - CLI 與 Phase 4 UI 採用同一套 Study Mode 安全規則。
+
+## [0.8.0] - 2026-06-10
+
+#### Added
+- **Phase 4 Tkinter 懸浮 UI (`ui_app.py`)**
+  - 新增標準庫 Tkinter 懸浮控制台，不額外要求 PyQt6 / CustomTkinter 安裝。
+  - UI 提供 Auto / Ask / Solve / Study 模式切換、自然語言輸入、回覆 log、Scan、Reset、Record / Stop、SOP 清單與 `/command` 路由。
+  - SAP COM 與 LLM 呼叫集中在背景 worker thread 執行，UI thread 只負責渲染與接收訊息，避免長時間呼叫卡住視窗。
+  - UI 替 Auto Mode 敏感操作確認與 Study Mode `guide_user_action()` 提供 Tkinter dialog bridge，避免沿用 CLI `input()` 造成 worker 卡死。
+  - Record Mode 在 UI 中可啟動 `SAPMonitor`，停止錄製後會保存 JSON 並嘗試產生 AI SOP。
+- **UI 啟動入口**
+  - `start.py` 新增 `--ui` / `ui` / `/ui` 參數，登入檢查完成後可啟動 `ui_app.py`。
+  - 新增 `start_ui.bat`，Windows 可直接啟動 Phase 4 UI；原 `start.bat` 保留 CLI 行為。
+
+#### Changed
+- CLI banner 更新為 `V0.8.0`。
+- README 與 plan.md 更新 Phase 4 完成狀態與 UI 啟動方式。
+
 ## [0.7.1] - 2026-06-10
 
 #### Changed
