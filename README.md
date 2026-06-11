@@ -89,13 +89,10 @@ uv venv
 # 3. 安裝套件
 uv pip install pywin32 requests python-dotenv mcp
 
-# 4. 另外 clone MCP SAP GUI server
-git clone https://github.com/kts982/mcp-sap-gui.git C:\tools\mcp-sap-gui
-cd C:\tools\mcp-sap-gui
-uv sync --extra screenshots
+# 4. 自動取得 MCP SAP GUI server fork，並寫入 .env
+python setup_mcp.py
 
 # 5. 回到本專案啟動，並在 CLI/UI 輸入 /mcp 檢查 MCP SAP GUI server
-cd <path-to-SAP_Copilot>
 python start.py
 ```
 
@@ -124,8 +121,9 @@ COPILOT_RETRY_MAX_SECONDS=60
 EDITOR_CONTEXT_MAX_CHARS=12000
 
 # Stage 2 MCP SAP GUI path
+# setup_mcp.py 會自動填入此路徑
 MCP_SAP_ENABLED=true
-MCP_SAP_SERVER_DIR=C:\tools\mcp-sap-gui
+MCP_SAP_SERVER_DIR=C:\path\to\SAP_Copilot\external\mcp-sap-gui
 MCP_SAP_LOCAL_COMMAND=uv
 MCP_SAP_LOCAL_ARGS=run python -m mcp_sap_gui.server
 MCP_SAP_ALLOW_PACKAGE_MODE=false
@@ -215,6 +213,7 @@ Stage 2 的方向是以 `mcp-sap-gui` 作為主要 SAP GUI 操作路徑，舊有
 Phase 1 已新增 `mcp_client.py`，負責：
 
 - 預設要求設定 `MCP_SAP_SERVER_DIR`，使用本機 clone 的 `MCP_SAP_LOCAL_COMMAND` / `MCP_SAP_LOCAL_ARGS`，預設為 `uv run python -m mcp_sap_gui.server`
+- 可執行 `python setup_mcp.py` 自動 clone/update `tingjunchen425/mcp-sap-gui` 到 `external/mcp-sap-gui`，並更新 `.env` 的 MCP 設定
 - `MCP_SAP_ALLOW_PACKAGE_MODE=true` 時才會嘗試 `uvx --from mcp-sap-gui==0.2.0 mcp-sap-gui`；目前實測 package registry 查無此 package，因此不作為預設
 - 預設將 `UV_CACHE_DIR` 指到 `C:\tmp\sap-copilot-uv-cache`，降低 Windows 使用者目錄 cache 權限造成的啟動失敗
 - `/mcp` 會顯示實際 command、cwd、cache、初始化結果、tool list、SAP attach 狀態與 server stderr tail
@@ -398,6 +397,8 @@ SAP_Copilot/
 ├── main.py              # CLI 入口 (REPL 互動介面)
 ├── ui_app.py            # Phase 4 Tkinter 懸浮控制台
 ├── mcp_client.py        # Stage 2 MCP SAP GUI client，MCP primary path
+├── setup_mcp.py         # 初始設定：clone/update MCP fork 並更新 .env
+├── setup_mcp.bat        # Windows MCP 初始設定批次檔
 ├── start.py             # 啟動器：確認 SAP / Copilot 登入後啟動 CLI 或 UI
 ├── start.bat            # Windows 啟動批次檔
 ├── start_ui.bat         # Windows UI 啟動批次檔

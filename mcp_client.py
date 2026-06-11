@@ -188,10 +188,11 @@ class MCPSAPClient:
         if not self.server_dir and not self.allow_package_mode:
             raise MCPClientUnavailable(
                 "MCP_SAP_SERVER_DIR is not configured. "
-                "The upstream mcp-sap-gui project is intended to run from a local clone "
-                "with `uv run python -m mcp_sap_gui.server`. "
-                "Clone https://github.com/kts982/mcp-sap-gui and set MCP_SAP_SERVER_DIR, "
-                "or set MCP_SAP_ALLOW_PACKAGE_MODE=true to explicitly try package mode."
+                "Run `python setup_mcp.py` to clone the SAP_Copilot MCP fork and set "
+                "MCP_SAP_SERVER_DIR, or manually clone "
+                "https://github.com/tingjunchen425/mcp-sap-gui and run it with "
+                "`uv run python -m mcp_sap_gui.server`, or set "
+                "MCP_SAP_ALLOW_PACKAGE_MODE=true to explicitly try package mode."
             )
         if shutil.which(self.command) is None:
             raise MCPClientUnavailable(f"MCP server command not found on PATH: {self.command}")

@@ -13,12 +13,15 @@
   - 在 `external/mcp-sap-gui` 新增 `sap_get_light_snapshot`，用於快速取得 screen info、active window、fingerprint 與 popup summary，不掃完整 elements。
   - 新增 `sap_set_fields_and_enter`，將 batch field fill 與 Enter validation 合併成單一 MCP call。
   - 新增 `sap_select_popup_table_row_and_confirm`，將彈窗 table row selection 與 confirm 合併成單一 MCP call，優先支援 MM03「選擇檢視」類流程。
+- **MCP 初始設定腳本**
+  - 新增 `setup_mcp.py` / `setup_mcp.bat`，可自動 clone/update `tingjunchen425/mcp-sap-gui` 到 `external/mcp-sap-gui`，執行 `uv sync --extra screenshots`，並更新 `.env` 的 MCP local server 設定。
 
 #### Changed
 - Auto Mode core MCP profile 會在 custom tools 存在時提供 composite tools，並在 prompt 中要求優先使用。
 - MCP fast screen context 會優先使用 `sap_get_light_snapshot`；若 custom MCP tools 不存在，維持 `0.9.6` 的 fallback 行為。
 - `sap_get_light_snapshot` 預設改由 agent 內部管理，不再讓 LLM 把它當成使用者可見的補救動作。
 - MCP navigation / screen change 結果會自動附 filtered elements；欄位寫入失敗會附 `field_write_recovery`，避免 MM03 這類初始畫面因猜錯欄位 ID 後轉向詢問使用者。
+- MCP 未設定時的錯誤提示改為優先建議執行 `python setup_mcp.py`。
 
 ## [0.9.6] - 2026-06-11
 
