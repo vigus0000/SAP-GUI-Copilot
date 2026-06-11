@@ -90,6 +90,8 @@ MCP_SCREEN_CACHE_TTL_SECONDS = float(os.getenv("MCP_SCREEN_CACHE_TTL_SECONDS", "
 MCP_SCREEN_CACHE_MAX_WRITES = int(os.getenv("MCP_SCREEN_CACHE_MAX_WRITES", "20"))
 MCP_EXPOSE_DISCOVERY_TO_LLM = env_enabled("MCP_EXPOSE_DISCOVERY_TO_LLM", "false")
 MCP_POPUP_USE_POPUP_TOOL_ONLY = env_enabled("MCP_POPUP_USE_POPUP_TOOL_ONLY", "true")
+MCP_ATTACH_ELEMENTS_AFTER_NAV = env_enabled("MCP_ATTACH_ELEMENTS_AFTER_NAV", "true")
+MCP_ATTACH_ELEMENTS_ON_FIELD_FAILURE = env_enabled("MCP_ATTACH_ELEMENTS_ON_FIELD_FAILURE", "true")
 MCP_FAST_SCREEN_TYPE_FILTER = os.getenv(
     "MCP_FAST_SCREEN_TYPE_FILTER",
     ",".join([
@@ -114,12 +116,14 @@ MCP_CORE_TOOL_NAMES = set(env_list(
         "sap_list_connections",
         "sap_get_session_info",
         "sap_get_screen_info",
+        "sap_get_light_snapshot",
         "sap_get_screen_elements",
         "sap_execute_transaction",
         "sap_send_key",
         "sap_read_field",
         "sap_set_field",
         "sap_set_batch_fields",
+        "sap_set_fields_and_enter",
         "sap_press_button",
         "sap_select_menu",
         "sap_select_checkbox",
@@ -132,6 +136,7 @@ MCP_CORE_TOOL_NAMES = set(env_list(
         "sap_set_focus",
         "sap_read_table",
         "sap_select_table_row",
+        "sap_select_popup_table_row_and_confirm",
         "sap_select_multiple_rows",
         "sap_get_popup_window",
         "sap_handle_popup",
@@ -181,6 +186,7 @@ MCP_DYNAMIC_TOOL_GROUPS = {
 MCP_FIELD_WRITE_TOOL_NAMES = {
     "sap_set_field",
     "sap_set_batch_fields",
+    "sap_set_fields_and_enter",
     "sap_select_checkbox",
     "sap_select_radio_button",
     "sap_select_combobox_entry",
@@ -195,6 +201,7 @@ MCP_NAVIGATION_TOOL_NAMES = {
     "sap_select_tab",
     "sap_handle_popup",
     "sap_select_table_row",
+    "sap_select_popup_table_row_and_confirm",
     "sap_select_multiple_rows",
     "sap_double_click_cell",
     "sap_press_alv_toolbar_button",
@@ -210,6 +217,7 @@ MCP_DISCOVERY_TOOL_NAMES = {
     "sap_get_session_info",
     "sap_get_current_session_info",
     "sap_get_screen_info",
+    "sap_get_light_snapshot",
     "sap_get_screen_elements",
     "sap_get_screen",
     "sap_scan_screen",
@@ -241,9 +249,12 @@ SYSTEM_PROMPT_AUTO = """你是一個專業的 SAP GUI 操作助手。你可以�
 - screen JSON 中的 fields 會把欄位 label 與元件 ID 配對；填欄位時優先使用 fields 裡的 id 或 handle_popup(field_label=...)
 - 如果 fields 的 type 是 GuiComboBox、dropdown=true 或含 options，代表下拉式選單；必須使用 select_combo，或在彈窗中用 handle_popup 依 label 選值，不要把它當一般文字欄位 set_text
 - 下拉式選單若有 options，優先用 option key；沒有 key 時才用顯示文字
-- 使用 MCP 工具時，如果同一畫面要填 2 個以上一般文字欄位，優先一次呼叫 sap_set_batch_fields(fields={id: value, ...}, validate=false)，不要逐欄 sap_set_field
-- 如果批次填欄位後需要立即驗證或送出，使用 sap_set_batch_fields(..., validate=true)，或批次填完後再呼叫一次 sap_send_key("Enter") / sap_press_button(...)
+- 使用 MCP 工具時，如果有 sap_set_fields_and_enter，且同一畫面要填欄位後按 Enter 驗證，優先一次呼叫 sap_set_fields_and_enter(fields={id: value, ...})；不要拆成 sap_set_batch_fields + sap_send_key
+- 如果只需要填多個欄位但暫不送出，才使用 sap_set_batch_fields(fields={id: value, ...}, validate=false)，不要逐欄 sap_set_field
+- 如果畫面是彈窗 table row 選擇後要按繼續，且有 sap_select_popup_table_row_and_confirm，優先一次呼叫它；不要拆成 sap_select_table_row + sap_handle_popup
 - 不要把 save/post/delete/confirm/release 等敏感提交操作放進批次欄位動作；這些操作仍必須走確認或由使用者明確允許
+- 如果工具結果的 screen_after 內含 screen_elements、field_write_recovery 或 instruction_to_agent，下一步必須優先使用其中列出的實際元件 ID 重試；不要要求使用者先列出元素 ID
+- 如果欄位寫入回傳 Could not set field 或 failed>0，代表使用了錯誤/過期的 ID；先根據 screen_after.field_write_recovery 或 screen_after.screen_elements 找正確欄位重試，不要立刻改成手動教學
 - 如果 fields 的 type 是 GuiCheckBox 或 GuiRadioButton，讀取狀態使用 read_checkbox，設定狀態使用 set_checkbox；不要用 set_text 寫入 True/False，也不要在狀態未知時盲目 click
 - checkbox/radio 的 fields[].value 會是 "True" / "False"，selected 也會標示布林狀態；操作前先確認目前狀態，避免重複切換
 - 如果 active_popup.tables 或 tables 顯示 GuiTableControl 列資料，且任務是勾選/選擇某一列（例如 MM03「選擇檢視」彈窗中的「基本資料 1」），優先使用 select_table_row(row_text=...)；不要只 click/highlight 文字 cell，因為 checkbox 可能藏在 table 選取欄內
@@ -710,6 +721,94 @@ class SAPAgent:
             "elements_at": time.time(),
         }
 
+    def _mcp_filtered_elements_for_screen(self, screen_info, reason, force=False):
+        """Read filtered elements internally and package them for a tool result."""
+        elements_tool = self._first_available_mcp_tool([
+            "sap_get_screen_elements",
+            *MCP_SCREEN_TOOL_CANDIDATES,
+        ])
+        if not elements_tool or not isinstance(screen_info, dict):
+            return None
+
+        active_window = str(screen_info.get("active_window") or "wnd[0]")
+        container_id = f"{active_window}/usr" if active_window.startswith("wnd[") else "wnd[0]/usr"
+        fingerprint = self._mcp_screen_fingerprint(screen_info)
+
+        if not force and self._mcp_cached_elements_valid(fingerprint, container_id):
+            return {
+                "backend": "mcp_internal_elements",
+                "tool": elements_tool,
+                "container_id": container_id,
+                "reason": reason,
+                "cache_hit": True,
+                "raw": self._mcp_screen_cache.get("elements_text", ""),
+                "instruction_to_agent": (
+                    "Use these discovered element IDs for the next action. "
+                    "Do not guess IDs and do not ask the user to list elements."
+                ),
+            }
+
+        try:
+            depth = MCP_FAST_SCREEN_MAX_DEPTH
+            if reason == "field_write_failed":
+                depth = max(depth, 3)
+            raw_elements = self._call_mcp_tool_text(elements_tool, {
+                "container_id": container_id,
+                "max_depth": depth,
+                "type_filter": MCP_FAST_SCREEN_TYPE_FILTER,
+                "changeable_only": MCP_FAST_SCREEN_CHANGEABLE_ONLY,
+            })
+            self._remember_mcp_elements(fingerprint, container_id, raw_elements)
+            return {
+                "backend": "mcp_internal_elements",
+                "tool": elements_tool,
+                "container_id": container_id,
+                "reason": reason,
+                "cache_hit": False,
+                "raw": raw_elements,
+                "instruction_to_agent": (
+                    "Use these discovered element IDs for the next action. "
+                    "Do not guess IDs and do not ask the user to list elements."
+                ),
+            }
+        except Exception as e:
+            return {
+                "backend": "mcp_internal_elements",
+                "reason": reason,
+                "error": str(e),
+            }
+
+    def _mcp_field_write_failed(self, tool_result):
+        if tool_result.get("backend") != "mcp":
+            return False
+        if tool_result.get("action", "") not in MCP_FIELD_WRITE_TOOL_NAMES:
+            return False
+
+        payload = tool_result.get("mcp_payload")
+        if not isinstance(payload, dict):
+            return not tool_result.get("success", True)
+
+        try:
+            if int(payload.get("failed") or 0) > 0:
+                return True
+        except Exception:
+            pass
+
+        results = payload.get("results")
+        if isinstance(results, dict):
+            for status in results.values():
+                text = str(status or "").lower()
+                if text.startswith("error") or "could not set field" in text:
+                    return True
+
+        validation = payload.get("validation")
+        if isinstance(validation, dict):
+            reason = str(validation.get("reason", "") or "").lower()
+            if "no fields were set" in reason:
+                return True
+
+        return False
+
     def _remember_mcp_field_writes(self, tool_result):
         if not tool_result.get("success", True):
             return
@@ -717,7 +816,7 @@ class SAPAgent:
         args = tool_result.get("_tool_args") or {}
         writes = {}
 
-        if action == "sap_set_batch_fields":
+        if action in {"sap_set_batch_fields", "sap_set_fields_and_enter"}:
             fields = args.get("fields") if isinstance(args, dict) else None
             payload = tool_result.get("mcp_payload")
             result_statuses = payload.get("results", {}) if isinstance(payload, dict) else {}
@@ -939,6 +1038,7 @@ class SAPAgent:
 
     def _mcp_fast_screen_context_text(self):
         parts = []
+        snapshot_tool = self._first_available_mcp_tool(["sap_get_light_snapshot"])
         screen_info_tool = self._first_available_mcp_tool([
             "sap_get_screen_info",
             *MCP_SESSION_INFO_TOOL_CANDIDATES,
@@ -953,7 +1053,31 @@ class SAPAgent:
         active_window = "wnd[0]"
         fingerprint = ""
         screen_events = []
-        if screen_info_tool:
+        popup_already_read = False
+        if snapshot_tool:
+            raw_snapshot = self._call_mcp_tool_text(snapshot_tool, {})
+            parts.append(f"### {snapshot_tool}\n{raw_snapshot}")
+            snapshot = self._parse_mcp_json_text(raw_snapshot)
+            if isinstance(snapshot, dict):
+                if isinstance(snapshot.get("screen"), dict):
+                    screen_info = snapshot["screen"]
+                else:
+                    screen_info = snapshot
+                active_window = str(
+                    snapshot.get("active_window")
+                    or screen_info.get("active_window")
+                    or "wnd[0]"
+                )
+                screen_events = self._mcp_screen_events_from_info(
+                    self._mcp_last_screen_info,
+                    screen_info,
+                )
+                self._mcp_last_screen_events = screen_events
+                remembered_fingerprint = self._remember_mcp_screen_info(screen_info)
+                fingerprint = str(snapshot.get("fingerprint") or "") or remembered_fingerprint
+                if snapshot.get("popup"):
+                    popup_already_read = True
+        elif screen_info_tool:
             raw_info = self._call_mcp_tool_text(screen_info_tool, {})
             parts.append(f"### {screen_info_tool}\n{raw_info}")
             screen_info = self._parse_mcp_json_text(raw_info)
@@ -973,9 +1097,11 @@ class SAPAgent:
             )
 
         skip_elements = False
-        if popup_tool and active_window != "wnd[0]":
+        if popup_tool and active_window != "wnd[0]" and not popup_already_read:
             raw_popup = self._call_mcp_tool_text(popup_tool, {})
             parts.append(f"### {popup_tool}\n{raw_popup}")
+            skip_elements = MCP_POPUP_USE_POPUP_TOOL_ONLY
+        elif active_window != "wnd[0]" and popup_already_read:
             skip_elements = MCP_POPUP_USE_POPUP_TOOL_ONLY
 
         if elements_tool and not skip_elements:
@@ -1508,6 +1634,24 @@ class SAPAgent:
                 }
                 if screen_events:
                     screen_after["events"] = screen_events
+                if (
+                    (action in MCP_NAVIGATION_TOOL_NAMES or screen_events)
+                    and MCP_ATTACH_ELEMENTS_AFTER_NAV
+                ):
+                    elements_context = self._mcp_filtered_elements_for_screen(
+                        tool_result["mcp_screen"],
+                        "screen_changed" if screen_events else "navigation_result",
+                    )
+                    if elements_context:
+                        screen_after["screen_elements"] = elements_context
+                if self._mcp_field_write_failed(tool_result) and MCP_ATTACH_ELEMENTS_ON_FIELD_FAILURE:
+                    recovery_context = self._mcp_filtered_elements_for_screen(
+                        tool_result["mcp_screen"],
+                        "field_write_failed",
+                        force=True,
+                    )
+                    if recovery_context:
+                        screen_after["field_write_recovery"] = recovery_context
                 tool_result["screen_after"] = screen_after
                 tool_result["screen_summary"] = screen_after
                 return tool_result
@@ -1524,6 +1668,14 @@ class SAPAgent:
                         if key not in {"password", "BCODE"}
                     },
                 }
+                if self._mcp_field_write_failed(tool_result) and MCP_ATTACH_ELEMENTS_ON_FIELD_FAILURE:
+                    recovery_context = self._mcp_filtered_elements_for_screen(
+                        self._mcp_last_screen_info,
+                        "field_write_failed",
+                        force=True,
+                    )
+                    if recovery_context:
+                        screen_after["field_write_recovery"] = recovery_context
                 tool_result["screen_after"] = screen_after
                 tool_result["screen_summary"] = screen_after
                 return tool_result

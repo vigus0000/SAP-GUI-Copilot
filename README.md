@@ -143,6 +143,8 @@ MCP_SCREEN_CACHE_TTL_SECONDS=30
 MCP_SCREEN_CACHE_MAX_WRITES=20
 MCP_EXPOSE_DISCOVERY_TO_LLM=false
 MCP_POPUP_USE_POPUP_TOOL_ONLY=true
+MCP_ATTACH_ELEMENTS_AFTER_NAV=true
+MCP_ATTACH_ELEMENTS_ON_FIELD_FAILURE=true
 MCP_FAST_SCREEN_TYPE_FILTER=GuiTextField,GuiCTextField,GuiPasswordField,GuiComboBox,GuiCheckBox,GuiRadioButton,GuiButton,GuiTab,GuiTableControl,GuiShell,GuiOkCodeField
 MCP_SAP_SCREEN_TOOLS=sap_get_screen_elements,sap_get_screen,sap_scan_screen,sap_get_current_screen
 MCP_SAP_SESSION_INFO_TOOLS=sap_get_session_info,sap_get_current_session_info
@@ -230,7 +232,13 @@ Phase 2 已將 `llm_brain.py` 改為 MCP-first：
 
 Phase 2.1 新增 MCP speed mode：
 
-- `MCP_SAP_TOOL_PROFILE=core` 預設只把常用 MCP tools 提供給 Copilot；需要完整 57 個 tools 時可改為 `full`
+- `MCP_SAP_TOOL_PROFILE=core` 預設只把常用 MCP tools 提供給 Copilot；需要完整 MCP tool 清單時可改為 `full`
+- 若本機 `external/mcp-sap-gui` 提供 composite tools，Auto Mode 會優先使用 `sap_get_light_snapshot`、`sap_set_fields_and_enter`、`sap_select_popup_table_row_and_confirm`
+- `sap_get_light_snapshot` 只讀 screen info / popup summary / fingerprint，不掃完整 elements，適合每輪狀態檢查
+- `sap_set_fields_and_enter` 將多欄填值與 Enter validation 合併成一次 MCP call
+- `sap_select_popup_table_row_and_confirm` 將彈窗 table row selection 與確認合併，適合 MM03 選擇檢視等流程
+- `MCP_ATTACH_ELEMENTS_AFTER_NAV=true` 時，交易切換、畫面跳轉或 Enter 後的 screen change 會自動附上 filtered elements，避免下一輪猜欄位 ID
+- `MCP_ATTACH_ELEMENTS_ON_FIELD_FAILURE=true` 時，欄位寫入失敗會自動讀一次 filtered elements 並放入 `field_write_recovery`，讓下一輪直接用正確 ID 重試
 - `MCP_SAP_FAST_MODE=true` 時，初始畫面只抓 `sap_get_screen_info` 與 filtered `sap_get_screen_elements`
 - `MCP_SCREEN_CACHE_ENABLED=true` 時，每輪只用 `sap_get_screen_info` 檢查畫面 fingerprint；同一畫面會復用上一輪 elements，避免重複讀完整畫面
 - `MCP_SCREEN_CACHE_TTL_SECONDS` 控制 elements cache 有效時間；一般欄位寫入會另以 local write cache 補充本輪最新值

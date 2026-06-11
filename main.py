@@ -84,7 +84,7 @@ def print_banner():
     print(f"""
 {Colors.CYAN}╔══════════════════════════════════════════════════╗
 ║                                                  ║
-║   🤖 SAP GUI Copilot  V0.9.6  (Stage 2)         ║
+║   🤖 SAP GUI Copilot  V0.10.0 (Stage 2)         ║
 ║   ─────────────────────────────────────────────   ║
 ║   用自然語言操作 SAP，告別繁瑣的 T-Code！        ║
 ║                                                  ║

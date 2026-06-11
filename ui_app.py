@@ -33,7 +33,7 @@ from sap_skill_library import SAPSkillLibrary
 from mcp_client import get_default_sync_client
 
 
-APP_VERSION = "0.9.6"
+APP_VERSION = "0.10.0"
 
 MODE_LABELS = {
     "auto": "Auto",
