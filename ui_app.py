@@ -30,9 +30,10 @@ from sap_core import SAPConnection
 from sap_monitor import SAPMonitor
 from sap_recorder import SAPRecorder
 from sap_skill_library import SAPSkillLibrary
+from mcp_client import get_default_sync_client
 
 
-APP_VERSION = "0.8.1"
+APP_VERSION = "0.9.6"
 
 MODE_LABELS = {
     "auto": "Auto",
@@ -275,6 +276,8 @@ class SAPCopilotWorker(threading.Thread):
                 self._handle_text(job.get("text", ""))
             elif action == "scan":
                 self._scan()
+            elif action == "mcp_probe":
+                self._mcp_probe()
             elif action == "reset":
                 self.agent.reset_conversation()
                 self.log("Conversation reset.")
@@ -437,6 +440,8 @@ class SAPCopilotWorker(threading.Thread):
             self._set_mode(cmd[1:])
         elif cmd == "/scan":
             self._scan()
+        elif cmd == "/mcp":
+            self._mcp_probe()
         elif cmd == "/reset":
             self.agent.reset_conversation()
             self.log("Conversation reset.")
@@ -462,7 +467,7 @@ class SAPCopilotWorker(threading.Thread):
         elif cmd == "/connect":
             self._connect()
         else:
-            self.log("Available commands: /scan, /record, /stop, /recordings, /play, /study, /ask, /solve, /auto, /reset")
+            self.log("Available commands: /scan, /mcp, /record, /stop, /recordings, /play, /study, /ask, /solve, /auto, /reset")
 
     def _extra_context_for_current_mode(self):
         if self.agent.mode == "study":
@@ -491,6 +496,48 @@ class SAPCopilotWorker(threading.Thread):
     def _scan(self):
         screen = scan_sap_screen(self._session())
         self.log("Screen scan:\n" + self._format_screen(screen))
+
+    def _mcp_probe(self):
+        client = get_default_sync_client()
+        try:
+            report = client.probe(attach=True)
+        except Exception as exc:
+            report = client.launch_summary()
+            report["error"] = str(exc)
+
+        command = report.get("command", "")
+        args = report.get("args") or []
+        command_line = " ".join([command] + [str(arg) for arg in args]).strip()
+        lines = [
+            "MCP SAP GUI diagnostics:",
+            f"Enabled: {report.get('enabled')}",
+            f"Mode: {report.get('mode') or '-'}",
+            f"Command: {command_line or '-'}",
+            f"CWD: {report.get('cwd') or '-'}",
+            f"UV_CACHE_DIR: {report.get('uv_cache_dir') or '-'}",
+            f"Prerequisites: {'OK' if report.get('available') else 'FAILED'}",
+            f"Initialize: {'OK' if report.get('initialized') else 'FAILED'}",
+        ]
+        attach = report.get("attach") or {}
+        if attach:
+            attach_text = "OK" if attach.get("attached") else attach.get("reason", "not attached")
+            if attach.get("tool"):
+                attach_text = f"{attach_text} via {attach.get('tool')}"
+            lines.append(f"SAP Attach: {attach_text}")
+        tools = report.get("tools") or []
+        lines.append(f"Tool Count: {report.get('tool_count', len(tools))}")
+        if tools:
+            suffix = " ..." if len(tools) > 12 else ""
+            lines.append("Tools: " + ", ".join(tools[:12]) + suffix)
+        error = report.get("error") or report.get("last_error") or ""
+        if error:
+            lines.append("Error:")
+            lines.append(error)
+        stderr_tail = report.get("stderr_tail") or ""
+        if stderr_tail:
+            lines.append("Server stderr tail:")
+            lines.append(stderr_tail[-3000:])
+        self.log("\n".join(lines))
 
     def _format_screen(self, screen):
         lines = [
@@ -714,6 +761,7 @@ class SAPCopilotUI:
         actions = ttk.Frame(outer)
         actions.pack(fill=tk.X, pady=(0, 8))
         ttk.Button(actions, text="Scan", command=lambda: self.worker.submit("scan")).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(actions, text="MCP", command=lambda: self.worker.submit("mcp_probe")).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(actions, text="Reset", command=lambda: self.worker.submit("reset")).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(actions, text="Record", command=self._record_dialog).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(actions, text="Stop", command=lambda: self.worker.submit("stop_record")).pack(side=tk.LEFT, padx=(0, 6))
@@ -732,7 +780,7 @@ class SAPCopilotUI:
         self.input_text.bind("<Return>", self._return_key)
         ttk.Button(input_row, text="Send", command=self.send).pack(side=tk.LEFT, padx=(8, 0), fill=tk.Y)
 
-        self._append("UI ready. Use buttons or commands like /scan, /ask, /solve, /recordings.\n")
+        self._append("UI ready. Use buttons or commands like /scan, /mcp, /ask, /solve, /recordings.\n")
 
     def _toggle_topmost(self):
         self.root.attributes("-topmost", bool(self.always_on_top_var.get()))

@@ -6,6 +6,102 @@
 
 ---
 
+## [0.9.6] - 2026-06-11
+
+#### Changed
+- **MCP screen discovery 改為內部事件驅動**
+  - `sap_get_screen_elements`、`sap_get_screen_info`、`sap_get_popup_window` 等讀畫面工具預設不再暴露給 Copilot tool schema，避免模型主動要求完整畫面掃描。
+  - 若模型仍因舊上下文呼叫 discovery tool，agent 會回傳內部 cached context 提示，不再 fallback 到 legacy `scan_sap_screen()`。
+  - MCP context 會依 `sap_get_screen_info` 產生 `TCODE_CHANGE`、`SCREEN_CHANGE`、`ACTIVE_WINDOW_CHANGE`、`WINDOW_OPEN`、`WINDOW_CLOSE` 事件，復用 Record/Monitor 的畫面切換語意。
+  - 活動視窗是彈窗時，預設只讀 `sap_get_popup_window`，不再同時掃 `wnd[1]/usr` elements。
+
+#### Added
+- `.env.example` / README 新增 `MCP_EXPOSE_DISCOVERY_TO_LLM` 與 `MCP_POPUP_USE_POPUP_TOOL_ONLY`。
+
+## [0.9.5] - 2026-06-11
+
+#### Changed
+- **MCP screen context cache**
+  - Auto/Ask/Solve/Study 的 MCP fast screen context 每輪仍讀 `sap_get_screen_info`，但會用 `active_window + transaction + program + screen_number + title` 建立 fingerprint。
+  - fingerprint 未變且 cache 未過期時，復用上一輪 `sap_get_screen_elements` 結果，避免同一畫面反覆完整掃描。
+  - 一般欄位寫入與 batch fields 成功後會記錄 local field write cache，下一輪 context 會提示最新寫入值，降低因 elements cache 仍含舊值造成的誤判。
+  - `sap_set_batch_fields(validate=true)` 現在會直接使用 `validation.screen` 作為 tool 後畫面狀態，不再額外補一次 screen info。
+
+#### Added
+- `.env.example` / README 新增 `MCP_SCREEN_CACHE_ENABLED`、`MCP_SCREEN_CACHE_TTL_SECONDS`、`MCP_SCREEN_CACHE_MAX_WRITES`。
+
+## [0.9.4] - 2026-06-11
+
+#### Changed
+- **MCP GUI 操作速度優化**
+  - `mcp_client.py` 會自行載入 `.env`，獨立測試與不同入口都能讀到 MCP local server 設定。
+  - `SyncMCPSAPClient` 改為單一背景 async worker 執行 MCP connect/list/call/close，避免 stdio session 在不同 task 關閉造成 cancel-scope 錯誤。
+  - Auto Mode 預設使用 `MCP_SAP_TOOL_PROFILE=core`，只提供常用 MCP tools；`full` 才提供完整工具清單。
+  - `MCP_SAP_FAST_MODE=true` 時，初始畫面使用 `sap_get_screen_info` + filtered `sap_get_screen_elements`，降低畫面 payload 與掃描時間。
+  - MCP tool 執行後採 smart scan：優先使用 action response 內建 screen，一般欄位寫入不重掃，導航/彈窗類工具才補輕量 screen info。
+  - Auto prompt 明確要求同畫面多欄輸入優先使用 `sap_set_batch_fields`。
+
+#### Added
+- 新增 `MCP_TIMING_DEBUG`，可列印 Copilot API、MCP call、screen scan 耗時。
+- README 與 `.env.example` 補上 `MCP_SAP_FAST_MODE`、`MCP_SAP_TOOL_PROFILE` 與 filtered screen element 設定。
+
+## [0.9.3] - 2026-06-10
+
+#### Fixed
+- **MCP 設定與 stderr capture 測試修正**
+  - 修正 `mcp_client.py` 的 stderr capture：改用具有真實 file descriptor 的 temporary file，避免 Windows/anyio 啟動 MCP 子程序時出現 `fileno`。
+  - 實測 `uvx --from mcp-sap-gui==0.2.0 mcp-sap-gui` 目前無法從 package registry 解析，因此預設不再硬啟動 package mode。
+  - 未設定 `MCP_SAP_SERVER_DIR` 時，`/mcp` 會快速回報需要本機 clone，而不是等待 uvx 解析失敗後才 fallback。
+  - 保留 `MCP_SAP_ALLOW_PACKAGE_MODE=true` 作為明確 opt-in 的 package mode。
+  - `/mcp` 輸出 error / stderr tail 時會做 console-safe 轉碼，避免 Windows cp950 無法列印 uv 錯誤字元。
+
+#### Changed
+- README 與 `.env.example` 改為官方建議的 local clone 啟動方式：`MCP_SAP_SERVER_DIR` + `uv run python -m mcp_sap_gui.server`。
+
+## [0.9.2] - 2026-06-10
+
+#### Fixed
+- **MCP server 啟動診斷與 fallback 穩定性**
+  - `mcp_client.py` 預設改用 `uvx --from mcp-sap-gui==0.2.0 mcp-sap-gui`，避免只執行舊版或錯誤 package 名稱造成 stdio server 直接關閉。
+  - 新增 `MCP_SAP_SERVER_DIR` 與 `MCP_SAP_LOCAL_COMMAND` / `MCP_SAP_LOCAL_ARGS`，可切換到本機 clone 的 `uv run python -m mcp_sap_gui.server` 路徑。
+  - 新增 `MCP_SAP_UV_CACHE_DIR`，預設指向 `C:\tmp\sap-copilot-uv-cache`，降低 Windows 使用者目錄 uv cache 權限問題。
+  - MCP 初始化、`list_tools()`、`call_tool()` 失敗時會保留 command、cwd、cache 與 stderr tail，避免只看到 `Connection closed`。
+  - Auto / Ask / Solve / Study 與 Record monitor 會在 MCP tool list 載入後嘗試 `sap_connect_existing` attach SAP session；失敗時仍回退 legacy GUI fallback。
+
+#### Added
+- CLI 與 Tkinter UI 新增 `/mcp` 診斷入口，可檢查 MCP prerequisites、初始化狀態、SAP attach、tool list 與 server stderr tail。
+- `.env.example` 與 README 補上 pinned MCP 啟動設定、local server dir 設定與 `/mcp` 使用方式。
+
+## [0.9.1] - 2026-06-10
+
+#### Changed
+- **Stage 2 Phase 2 LLM Brain MCP-first routing**
+  - `llm_brain.py` 會優先從 `mcp_client.py` 取得 MCP tool list，動態提供給 Copilot tool calling。
+  - Auto Mode 的工具呼叫優先轉發到 MCP；若 MCP 不可用或單次 tool call 失敗，會嘗試回退到既有 `sap_agent_tools.py` legacy GUI COM 工具。
+  - Ask / Solve / Study 的畫面 context 優先使用 MCP screen tools，失敗時回退到原本 `scan_sap_screen()`。
+  - Study Mode 保留本地 `guide_user_action` human-in-the-loop 工具；若 MCP 提供 focus tool，會先用 MCP 聚焦欄位，再交由本地提示流程。
+
+#### Added
+- **Stage 2 Phase 3 MCP-first Record monitor**
+  - `sap_monitor.py` 新增 MCP snapshot 路徑，優先使用 `mcp-sap-gui` session/screen tools 進行 polling。
+  - MCP snapshot 採寬鬆解析，支援 JSON 與文字格式，會擷取 T-Code、screen、title、status、field values 與 window titles。
+  - MCP monitor 啟動或初始快照失敗時，自動回退到原本 pywin32 COM monitor。
+  - `.env.example` 新增 MCP screen/session/focus tool candidates 與 `MCP_SAP_MONITOR_ENABLED`、`MCP_SAP_MONITOR_POLL_SECONDS`。
+
+## [0.9.0] - 2026-06-10
+
+#### Added
+- **Stage 2 Phase 1 MCP client**
+  - 新增 `mcp_client.py`，以 `mcp.client.stdio.stdio_client` 與 `mcp.ClientSession` 管理 `uvx mcp-sap-gui` 連線。
+  - 實作 `connect()`、`get_available_tools()`、`call_tool()` 三個核心 async 方法。
+  - `get_available_tools()` 會將 MCP tool 轉成 GitHub Copilot / OpenAI tool calling 相容 JSON Schema。
+  - `call_tool()` 會將 MCP tool result 整理成可寫回 tool message 的字串。
+  - 新增 `SyncMCPSAPClient`，讓目前同步 CLI / UI 架構可在 Phase 2 優先接 MCP，並保留既有 GUI COM 工具作 fallback。
+
+#### Changed
+- README 與 `.env.example` 新增 Stage 2 MCP 設定：`MCP_SAP_ENABLED`、`MCP_SAP_COMMAND`、`MCP_SAP_ARGS`。
+- 專案架構說明調整為 MCP primary path，舊 `sap_core.py` / `sap_agent_tools.py` 暫作遷移期 fallback。
+
 ## [0.8.1] - 2026-06-10
 
 #### Changed

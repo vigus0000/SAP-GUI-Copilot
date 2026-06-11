@@ -36,13 +36,16 @@ SAP GUI Copilot 是一個以 Python 打造的 SAP GUI 智慧助手，透過 COM 
 │  ReAct Loop                 0.3s Snapshot Diff       │
 │          │                          │                │
 │          ▼                          ▼                │
-│  sap_agent_tools.py         sap_recorder.py         │
-│  (Scanner + Actor)          (SOP JSON Manager)       │
-│          │                                           │
-│  sap_skill_library.py ── skills/ + recordings/       │
+│  mcp_client.py              sap_recorder.py         │
+│  (MCP primary path)         (SOP JSON Manager)       │
 │          │                                           │
 │          ▼                                           │
-│  sap_core.py ──── SAP GUI COM Interface ──── SAP    │
+│  mcp-sap-gui ──── SAP GUI Scripting ──── SAP        │
+│          │                                           │
+│          ▼ fallback during migration                │
+│  sap_agent_tools.py / sap_core.py (legacy GUI COM)  │
+│          │                                           │
+│  sap_skill_library.py ── skills/ + recordings/       │
 │          │                                           │
 │  copilot_auth.py ── GitHub Copilot API ── LLM       │
 └──────────────────────────────────────────────────────┘
@@ -55,7 +58,7 @@ SAP GUI Copilot 是一個以 Python 打造的 SAP GUI 智慧助手，透過 COM 
 | 項目 | 技術 |
 |------|------|
 | 語言 | Python 3.10+ |
-| SAP 整合 | `pywin32` (COM Interface) |
+| SAP 整合 | Stage 2 起以 `mcp-sap-gui` / MCP 為主要路徑，`pywin32` COM Interface 暫作 fallback |
 | LLM 後端 | GitHub Copilot API (`api.githubcopilot.com`) |
 | 認證 | GitHub OAuth Device Flow |
 | 監控策略 | Polling-based Snapshot Diff（取代不穩定的 `WithEvents`） |
@@ -84,7 +87,16 @@ cd SAP_Copilot
 uv venv
 
 # 3. 安裝套件
-uv pip install pywin32 requests python-dotenv
+uv pip install pywin32 requests python-dotenv mcp
+
+# 4. 另外 clone MCP SAP GUI server
+git clone https://github.com/kts982/mcp-sap-gui.git C:\tools\mcp-sap-gui
+cd C:\tools\mcp-sap-gui
+uv sync --extra screenshots
+
+# 5. 回到本專案啟動，並在 CLI/UI 輸入 /mcp 檢查 MCP SAP GUI server
+cd <path-to-SAP_Copilot>
+python start.py
 ```
 
 ### 設定 `.env`
@@ -110,6 +122,33 @@ COPILOT_MAX_RETRIES=4
 COPILOT_RETRY_BASE_SECONDS=2
 COPILOT_RETRY_MAX_SECONDS=60
 EDITOR_CONTEXT_MAX_CHARS=12000
+
+# Stage 2 MCP SAP GUI path
+MCP_SAP_ENABLED=true
+MCP_SAP_SERVER_DIR=C:\tools\mcp-sap-gui
+MCP_SAP_LOCAL_COMMAND=uv
+MCP_SAP_LOCAL_ARGS=run python -m mcp_sap_gui.server
+MCP_SAP_ALLOW_PACKAGE_MODE=false
+MCP_SAP_COMMAND=uvx
+MCP_SAP_ARGS=--from mcp-sap-gui==0.2.0 mcp-sap-gui
+MCP_SAP_UV_CACHE_DIR=C:\tmp\sap-copilot-uv-cache
+MCP_SAP_FAILURE_COOLDOWN_SECONDS=30
+MCP_TIMING_DEBUG=false
+MCP_SAP_FAST_MODE=true
+MCP_SAP_TOOL_PROFILE=core
+MCP_FAST_SCREEN_MAX_DEPTH=2
+MCP_FAST_SCREEN_CHANGEABLE_ONLY=false
+MCP_SCREEN_CACHE_ENABLED=true
+MCP_SCREEN_CACHE_TTL_SECONDS=30
+MCP_SCREEN_CACHE_MAX_WRITES=20
+MCP_EXPOSE_DISCOVERY_TO_LLM=false
+MCP_POPUP_USE_POPUP_TOOL_ONLY=true
+MCP_FAST_SCREEN_TYPE_FILTER=GuiTextField,GuiCTextField,GuiPasswordField,GuiComboBox,GuiCheckBox,GuiRadioButton,GuiButton,GuiTab,GuiTableControl,GuiShell,GuiOkCodeField
+MCP_SAP_SCREEN_TOOLS=sap_get_screen_elements,sap_get_screen,sap_scan_screen,sap_get_current_screen
+MCP_SAP_SESSION_INFO_TOOLS=sap_get_session_info,sap_get_current_session_info
+MCP_SAP_SET_FOCUS_TOOLS=sap_set_focus,sap_focus_element
+MCP_SAP_MONITOR_ENABLED=true
+MCP_SAP_MONITOR_POLL_SECONDS=1.0
 
 # Study Mode
 STUDY_PREFIX_TCODE_OUTSIDE_START=true
@@ -167,6 +206,46 @@ start_ui.bat
 
 `start.py` 會先確認 SAP GUI 是否已登入；若尚未登入，會執行 `sap_login.py`。接著檢查 GitHub Copilot 授權，完成後預設啟動 `main.py`。若使用 `--ui`，則啟動 `ui_app.py` 的 Tkinter 懸浮控制台。首次啟動時，程式會顯示 GitHub Device Flow 授權碼，在瀏覽器中完成授權後即可使用。
 
+### Stage 2 MCP 遷移
+
+Stage 2 的方向是以 `mcp-sap-gui` 作為主要 SAP GUI 操作路徑，舊有 `sap_core.py` / `sap_agent_tools.py` 的 pywin32 COM 操作保留為遷移期間的 fallback。
+
+Phase 1 已新增 `mcp_client.py`，負責：
+
+- 預設要求設定 `MCP_SAP_SERVER_DIR`，使用本機 clone 的 `MCP_SAP_LOCAL_COMMAND` / `MCP_SAP_LOCAL_ARGS`，預設為 `uv run python -m mcp_sap_gui.server`
+- `MCP_SAP_ALLOW_PACKAGE_MODE=true` 時才會嘗試 `uvx --from mcp-sap-gui==0.2.0 mcp-sap-gui`；目前實測 package registry 查無此 package，因此不作為預設
+- 預設將 `UV_CACHE_DIR` 指到 `C:\tmp\sap-copilot-uv-cache`，降低 Windows 使用者目錄 cache 權限造成的啟動失敗
+- `/mcp` 會顯示實際 command、cwd、cache、初始化結果、tool list、SAP attach 狀態與 server stderr tail
+- 使用 `mcp.ClientSession` 初始化 session
+- 將 MCP tools 轉成 GitHub Copilot / OpenAI tool calling JSON Schema
+- 呼叫 MCP tool 並將結果整理成可放入 tool message 的字串
+- 提供同步 bridge，讓目前同步 CLI / UI 架構可在 Phase 2 接上 MCP
+
+Phase 2 已將 `llm_brain.py` 改為 MCP-first：
+
+- Auto Mode 啟動時會優先讀取 MCP tool list，並把 MCP tools 動態提供給 Copilot tool calling
+- 若 MCP SDK、MCP server 初始化、MCP tools 或單次 MCP tool call 失敗，會回到 legacy GUI COM tools
+- Ask / Solve / Study 的畫面 context 會優先使用 MCP screen tools；MCP 失敗時仍使用原本 `scan_sap_screen()`
+- Study Mode 的 `guide_user_action` 仍是本地 human-in-the-loop 工具；若 MCP 提供 `sap_set_focus`，會先用 MCP 聚焦欄位，再回到本地提示流程
+
+Phase 2.1 新增 MCP speed mode：
+
+- `MCP_SAP_TOOL_PROFILE=core` 預設只把常用 MCP tools 提供給 Copilot；需要完整 57 個 tools 時可改為 `full`
+- `MCP_SAP_FAST_MODE=true` 時，初始畫面只抓 `sap_get_screen_info` 與 filtered `sap_get_screen_elements`
+- `MCP_SCREEN_CACHE_ENABLED=true` 時，每輪只用 `sap_get_screen_info` 檢查畫面 fingerprint；同一畫面會復用上一輪 elements，避免重複讀完整畫面
+- `MCP_SCREEN_CACHE_TTL_SECONDS` 控制 elements cache 有效時間；一般欄位寫入會另以 local write cache 補充本輪最新值
+- `MCP_EXPOSE_DISCOVERY_TO_LLM=false` 時，`sap_get_screen_elements`、`sap_get_screen_info`、`sap_get_popup_window` 等讀畫面工具只由 agent 內部使用，不提供給 Copilot 主動呼叫
+- `MCP_POPUP_USE_POPUP_TOOL_ONLY=true` 時，活動視窗是彈窗時只讀 `sap_get_popup_window`，不再額外掃彈窗 elements
+- tool 執行後優先使用 MCP action response 內建的 `screen`，一般欄位寫入不重掃畫面，導航/彈窗類工具才補輕量 `sap_get_screen_info`
+- 同畫面多欄輸入會提示模型優先使用 `sap_set_batch_fields`，減少逐欄 tool call 與重掃
+- `MCP_TIMING_DEBUG=true` 可列印 Copilot API、MCP call、screen scan 耗時，方便比對優化前後
+
+Phase 3 已將 `sap_monitor.py` 改為 MCP-first polling：
+
+- Record Mode 背景監控會優先使用 MCP session/screen tools 產生 snapshot
+- 若 MCP 初始化或初始快照失敗，會自動切回舊 pywin32 COM monitor
+- MCP monitor 預設每秒 polling，可用 `MCP_SAP_MONITOR_POLL_SECONDS` 調整
+
 ---
 
 ## 📖 指令參考
@@ -179,6 +258,7 @@ start_ui.bat
 | `/scan` | 掃描並顯示當前 SAP 畫面、彈窗、錯誤訊息、欄位摘要與可操作元件 |
 | `/login` | 重新執行 GitHub Copilot 授權流程 |
 | `/reset` | 重置 AI 對話歷史 |
+| `/mcp` | 檢查 MCP SAP GUI server 啟動、工具清單、SAP session attach 與 stderr 診斷 |
 | `/quit` | 結束程式 |
 
 ### 模式切換
@@ -309,6 +389,7 @@ Solve Mode 是獨立的操作入口，但底層沿用 Ask Mode 的唯讀畫面�
 SAP_Copilot/
 ├── main.py              # CLI 入口 (REPL 互動介面)
 ├── ui_app.py            # Phase 4 Tkinter 懸浮控制台
+├── mcp_client.py        # Stage 2 MCP SAP GUI client，MCP primary path
 ├── start.py             # 啟動器：確認 SAP / Copilot 登入後啟動 CLI 或 UI
 ├── start.bat            # Windows 啟動批次檔
 ├── start_ui.bat         # Windows UI 啟動批次檔

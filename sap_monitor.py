@@ -2,7 +2,8 @@
 SAP GUI 背景監控器 (Polling-based)
 
 在背景執行緒中定期快照 SAP 畫面狀態，比對差異來偵測使用者操作。
-替代不穩定的 WithEvents 方案，提供穩定可靠的事件偵測。
+Stage 2 起優先使用 MCP (`mcp-sap-gui`) 擷取快照；若 MCP 不可用，
+保留舊 pywin32 COM 快照作為 fallback。
 
 偵測的事件類型：
 - TCODE_CHANGE: T-Code 切換
@@ -14,13 +15,42 @@ SAP GUI 背景監控器 (Polling-based)
 import threading
 import time
 import json
+import hashlib
+import os
+import re
 from datetime import datetime
-from pywintypes import com_error
-import pythoncom
-import win32com.client
+
+try:
+    import pythoncom
+    import win32com.client
+except Exception:  # pragma: no cover - Windows fallback dependency
+    pythoncom = None
+    win32com = None
+
+from mcp_client import get_default_sync_client
 
 
 MAX_WINDOW_SCAN = 6
+
+
+def env_enabled(name, default="true"):
+    return str(os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def env_list(name, default):
+    value = os.getenv(name, default)
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+MCP_MONITOR_ENABLED = env_enabled("MCP_SAP_MONITOR_ENABLED", os.getenv("MCP_SAP_ENABLED", "true"))
+MCP_SESSION_INFO_TOOL_CANDIDATES = env_list(
+    "MCP_SAP_SESSION_INFO_TOOLS",
+    "sap_get_session_info,sap_get_current_session_info",
+)
+MCP_SCREEN_TOOL_CANDIDATES = env_list(
+    "MCP_SAP_SCREEN_TOOLS",
+    "sap_get_screen_elements,sap_get_screen,sap_scan_screen,sap_get_current_screen",
+)
 
 
 def _safe_get_attr(obj, attr, default=None):
@@ -65,6 +95,131 @@ def _read_element_value(element, type_name):
 
 def _is_okcode_field_id(element_id):
     return str(element_id or "").endswith("/tbar[0]/okcd") or str(element_id or "").endswith("/okcd")
+
+
+def _strip_markdown_json(text):
+    value = str(text or "").strip()
+    if value.startswith("```"):
+        value = re.sub(r"^```(?:json|text)?\s*", "", value, flags=re.IGNORECASE)
+        value = re.sub(r"\s*```$", "", value)
+    return value.strip()
+
+
+def _try_parse_json(text):
+    value = _strip_markdown_json(text)
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except Exception:
+        pass
+
+    first = value.find("{")
+    last = value.rfind("}")
+    if first >= 0 and last > first:
+        try:
+            return json.loads(value[first:last + 1])
+        except Exception:
+            return None
+    return None
+
+
+def _iter_dicts(value):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _iter_dicts(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _iter_dicts(child)
+
+
+def _first_nested_value(value, keys):
+    wanted = {key.lower() for key in keys}
+    for item in _iter_dicts(value):
+        for key, item_value in item.items():
+            if str(key).lower() in wanted and item_value not in (None, ""):
+                return item_value
+    return ""
+
+
+def _find_first_list(value, keys):
+    wanted = {key.lower() for key in keys}
+    for item in _iter_dicts(value):
+        for key, item_value in item.items():
+            if str(key).lower() in wanted and isinstance(item_value, list):
+                return item_value
+    return []
+
+
+def _extract_mcp_field_values(value, max_fields=300):
+    fields = {}
+    candidates = []
+
+    for key in ("fields", "elements", "screen_elements", "controls"):
+        candidates.extend(_find_first_list(value, [key]))
+
+    if isinstance(value, list):
+        candidates.extend(value)
+
+    for item in candidates:
+        if len(fields) >= max_fields or not isinstance(item, dict):
+            continue
+        element_id = (
+            item.get("id")
+            or item.get("element_id")
+            or item.get("elementId")
+            or item.get("name")
+            or ""
+        )
+        if not element_id:
+            continue
+        type_name = str(item.get("type") or item.get("control_type") or "")
+        if type_name and not any(
+            marker in type_name
+            for marker in ("TextField", "ComboBox", "CheckBox", "RadioButton", "OkCode")
+        ):
+            if not any(key in item for key in ("value", "text", "selected", "key")):
+                continue
+        raw_value = (
+            item.get("value")
+            if item.get("value") not in (None, "")
+            else item.get("text")
+        )
+        if raw_value in (None, "") and "selected" in item:
+            raw_value = str(bool(item.get("selected")))
+        if raw_value in (None, "") and item.get("key") not in (None, ""):
+            raw_value = item.get("key")
+        if raw_value not in (None, ""):
+            fields[_short_element_id(element_id)] = str(raw_value)
+
+    return fields
+
+
+def _extract_mcp_window_titles(value):
+    titles = {}
+    windows = _find_first_list(value, ["windows", "window_titles"])
+    for item in windows:
+        if not isinstance(item, dict):
+            continue
+        window_id = item.get("id") or item.get("window_id") or item.get("windowId")
+        title = item.get("title") or item.get("text") or item.get("name") or ""
+        if window_id:
+            titles[_short_window_id(window_id)] = str(title)
+    popup = _first_nested_value(value, ["active_popup", "popup"])
+    if isinstance(popup, dict):
+        window_id = popup.get("id") or popup.get("window_id") or "wnd[1]"
+        title = popup.get("title") or popup.get("text") or ""
+        titles[_short_window_id(window_id)] = str(title)
+    return titles
+
+
+def _extract_from_text(patterns, text):
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    return ""
 
 
 class ScreenSnapshot:
@@ -157,6 +312,111 @@ class ScreenSnapshot:
             snap.field_values = _capture_editable_fields(session)
         except Exception as e:
             snap.capture_error = snap.capture_error or f"fields: {e}"
+
+        return snap
+
+    @staticmethod
+    def capture_mcp(mcp_client, tool_names=None):
+        """
+        從 MCP server 擷取當前畫面快照。
+
+        mcp-sap-gui 的回傳格式可能依版本調整，因此這裡採寬鬆解析：
+        JSON 優先；若只有文字，則用 regex 擷取 T-Code / screen / title。
+        """
+        snap = ScreenSnapshot()
+        tool_names = set(tool_names or [])
+
+        session_tool = next((name for name in MCP_SESSION_INFO_TOOL_CANDIDATES if name in tool_names), "")
+        screen_tool = next((name for name in MCP_SCREEN_TOOL_CANDIDATES if name in tool_names), "")
+
+        if not session_tool and not screen_tool:
+            snap.capture_error = "MCP server did not expose supported snapshot tools"
+            return snap
+
+        raw_parts = []
+        parsed_sources = []
+
+        for tool_name in (session_tool, screen_tool):
+            if not tool_name:
+                continue
+            try:
+                raw = mcp_client.call_tool(tool_name, {})
+            except Exception as e:
+                snap.capture_error = snap.capture_error or f"{tool_name}: {e}"
+                continue
+            raw_text = str(raw or "")
+            raw_parts.append(f"{tool_name}\n{raw_text}")
+            parsed = _try_parse_json(raw_text)
+            if parsed is not None:
+                parsed_sources.append(parsed)
+
+        raw_text = "\n\n".join(raw_parts)
+        combined = parsed_sources if len(parsed_sources) != 1 else parsed_sources[0]
+
+        if parsed_sources:
+            snap.tcode = str(_first_nested_value(combined, [
+                "tcode", "transaction", "transaction_code", "transactionCode",
+            ]) or "")
+            snap.screen_number = str(_first_nested_value(combined, [
+                "screen_number", "screenNumber", "screen", "dynpro",
+            ]) or "")
+            snap.title = str(_first_nested_value(combined, [
+                "title", "window_title", "windowTitle", "text",
+            ]) or "")
+            snap.program = str(_first_nested_value(combined, ["program", "program_name", "programName"]) or "")
+            active_window_value = _first_nested_value(combined, [
+                "active_window", "activeWindow", "window_id", "windowId",
+            ])
+            if isinstance(active_window_value, dict):
+                active_window_value = active_window_value.get("id") or active_window_value.get("window_id") or ""
+            snap.active_window = _short_window_id(active_window_value or "")
+
+            focus_value = _first_nested_value(combined, [
+                "focus_id", "focused_element", "focusedElement", "focus",
+            ])
+            if isinstance(focus_value, dict):
+                focus_value = focus_value.get("id") or focus_value.get("element_id") or ""
+            snap.focus_id = _short_element_id(focus_value or "")
+
+            status = _first_nested_value(combined, ["status_bar", "statusBar", "status"])
+            if isinstance(status, dict):
+                snap.status_type = str(status.get("type") or status.get("message_type") or status.get("severity") or "")
+                snap.status_text = str(status.get("text") or status.get("message") or "")
+            else:
+                snap.status_text = str(_first_nested_value(combined, [
+                    "status_text", "statusText", "message", "status_message",
+                ]) or "")
+                snap.status_type = str(_first_nested_value(combined, [
+                    "status_type", "statusType", "message_type",
+                ]) or "")
+
+            snap.field_values = _extract_mcp_field_values(combined)
+            snap.window_titles = _extract_mcp_window_titles(combined)
+
+        if raw_text and not snap.tcode:
+            snap.tcode = _extract_from_text([
+                r"T-?Code\s*[:=]\s*([A-Z0-9_/]+)",
+                r"Transaction\s*[:=]\s*([A-Z0-9_/]+)",
+                r"交易(?:代碼)?\s*[:=：]\s*([A-Z0-9_/]+)",
+            ], raw_text)
+        if raw_text and not snap.screen_number:
+            snap.screen_number = _extract_from_text([
+                r"Screen(?:Number)?\s*[:=]\s*([0-9]+)",
+                r"畫面\s*[:=：]\s*([0-9]+)",
+            ], raw_text)
+        if raw_text and not snap.title:
+            snap.title = _extract_from_text([
+                r"Title\s*[:=]\s*(.+)",
+                r"Window\s*Title\s*[:=]\s*(.+)",
+                r"標題\s*[:=：]\s*(.+)",
+            ], raw_text)
+
+        if raw_text and not snap.program:
+            # Internal fingerprint for debugging opaque text responses. Do not put
+            # this into field_values or the recorder would treat it as user input.
+            snap.program = "mcp:" + hashlib.sha1(
+                raw_text.encode("utf-8", errors="ignore")
+            ).hexdigest()[:12]
 
         return snap
 
@@ -422,6 +682,10 @@ class SAPMonitor:
         self._last_snapshot = None
         self._is_running = False
         self._capture_failures = 0
+        self.use_mcp = MCP_MONITOR_ENABLED
+        self.mcp_client = get_default_sync_client() if self.use_mcp else None
+        self._mcp_tool_names = set()
+        self._mcp_poll_interval = float(os.getenv("MCP_SAP_MONITOR_POLL_SECONDS", "1.0"))
 
     @property
     def is_running(self):
@@ -454,6 +718,89 @@ class SAPMonitor:
 
     def _monitor_loop(self):
         """背景監控主迴圈"""
+        if self.use_mcp and self.mcp_client is not None:
+            if self._monitor_loop_mcp():
+                return
+            print("\033[33m[Monitor] MCP 監控不可用，切換 legacy GUI fallback\033[0m")
+
+        self._monitor_loop_legacy()
+
+    def _load_mcp_tool_names(self):
+        tools = self.mcp_client.get_available_tools()
+        self._mcp_tool_names = {
+            item.get("function", {}).get("name", "")
+            for item in tools
+            if item.get("function", {}).get("name")
+        }
+        return self._mcp_tool_names
+
+    def _monitor_loop_mcp(self):
+        """MCP primary monitor loop. Returns False when legacy fallback should be used."""
+        try:
+            tool_names = self._load_mcp_tool_names()
+            if not any(name in tool_names for name in MCP_SESSION_INFO_TOOL_CANDIDATES + MCP_SCREEN_TOOL_CANDIDATES):
+                print("\033[33m[Monitor] MCP server 沒有可用的 session/screen snapshot 工具\033[0m")
+                return False
+            try:
+                attach_result = self.mcp_client.ensure_sap_connected(list(tool_names))
+                if attach_result.get("attempted") and not attach_result.get("attached"):
+                    print(f"\033[33m[Monitor] MCP SAP session attach 警告: {attach_result}\033[0m")
+            except Exception as attach_error:
+                print(f"\033[33m[Monitor] MCP SAP session attach 警告: {attach_error}\033[0m")
+
+            self._last_snapshot = ScreenSnapshot.capture_mcp(self.mcp_client, tool_names)
+            if self._last_snapshot.capture_error and not (
+                self._last_snapshot.tcode
+                or self._last_snapshot.screen_number
+                or self._last_snapshot.field_values
+            ):
+                print(f"\033[33m[Monitor] MCP 初始快照失敗: {self._last_snapshot.capture_error}\033[0m")
+                return False
+
+            field_count = len(self._last_snapshot.field_values)
+            print(
+                "\033[90m"
+                f"[Monitor] MCP 初始快照: T-Code={self._last_snapshot.tcode or '-'}, "
+                f"Screen={self._last_snapshot.screen_number or '-'}, "
+                f"Fields={field_count}, Active={self._last_snapshot.active_window or '-'}"
+                "\033[0m"
+            )
+
+            while not self._stop_event.is_set():
+                try:
+                    new_snapshot = ScreenSnapshot.capture_mcp(self.mcp_client, tool_names)
+                    if new_snapshot.capture_error:
+                        self._capture_failures += 1
+                        if self._capture_failures in (1, 5, 20) or self._capture_failures % 100 == 0:
+                            print(f"\033[33m[Monitor] MCP 快照擷取警告 #{self._capture_failures}: {new_snapshot.capture_error}\033[0m")
+                    else:
+                        self._capture_failures = 0
+
+                    if self._last_snapshot:
+                        events = _diff_snapshots(self._last_snapshot, new_snapshot)
+                        for event in events:
+                            event["source"] = "mcp"
+                            self._dispatch_event(event)
+
+                    self._last_snapshot = new_snapshot
+                except Exception as e:
+                    self._capture_failures += 1
+                    if self._capture_failures in (1, 5, 20) or self._capture_failures % 100 == 0:
+                        print(f"\033[33m[Monitor] MCP 背景監控讀取 SAP 失敗 #{self._capture_failures}: {e}\033[0m")
+
+                self._stop_event.wait(max(self.poll_interval, self._mcp_poll_interval))
+
+            return True
+        except Exception as e:
+            print(f"\033[33m[Monitor] MCP 監控啟動失敗: {e}\033[0m")
+            return False
+
+    def _monitor_loop_legacy(self):
+        """Legacy pywin32 COM monitor loop used as fallback."""
+        if pythoncom is None or win32com is None:
+            print("\033[31m[Monitor] legacy GUI fallback 不可用：pywin32 未安裝或無法匯入\033[0m")
+            return
+
         pythoncom.CoInitialize()
         try:
             thread_session = self._resolve_session_for_thread()

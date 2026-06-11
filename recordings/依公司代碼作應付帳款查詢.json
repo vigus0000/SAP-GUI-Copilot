@@ -1,0 +1,444 @@
+{
+  "name": "依公司代碼作應付帳款查詢",
+  "created_at": "2026-06-11T09:55:08.226797",
+  "duration_seconds": 45.2,
+  "event_count": 15,
+  "raw_event_count": 22,
+  "raw_events": [
+    {
+      "timestamp": "2026-06-11T09:55:28.568390",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/tbar[0]/okcd",
+        "from_value": "",
+        "to_value": "f",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:32.569598",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/tbar[0]/okcd",
+        "from_value": "",
+        "to_value": "f",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:33.379937",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/tbar[0]/okcd",
+        "from_value": "f",
+        "to_value": "fb",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:34.167832",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/tbar[0]/okcd",
+        "from_value": "fb",
+        "to_value": "fbl",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:34.973508",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/tbar[0]/okcd",
+        "from_value": "fbl",
+        "to_value": "fbl1n",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtKD_BUKRS-LOW",
+        "from_value": "",
+        "to_value": "1710",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/radX_OPSEL",
+        "from_value": "",
+        "to_value": "True",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtPA_STIDA",
+        "from_value": "",
+        "to_value": "2026/06/11",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/radX_CLSEL",
+        "from_value": "",
+        "to_value": "False",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/radX_AISEL",
+        "from_value": "",
+        "to_value": "False",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/chkX_NORM",
+        "from_value": "",
+        "to_value": "True",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/chkX_SHBV",
+        "from_value": "",
+        "to_value": "False",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/chkX_MERK",
+        "from_value": "",
+        "to_value": "False",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/chkX_PARK",
+        "from_value": "",
+        "to_value": "False",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/chkX_APAR",
+        "from_value": "",
+        "to_value": "False",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:37.920362",
+      "event_type": "TCODE_CHANGE",
+      "details": {
+        "from_tcode": "SESSION_MANAGER",
+        "to_tcode": "FBL1N",
+        "screen_number": "1000",
+        "title": "供應商明細項目顯示"
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:40.789075",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtKD_BUKRS-LOW",
+        "from_value": "1710",
+        "to_value": "1",
+        "tcode": "FBL1N",
+        "screen_number": "1000",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:41.714627",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtKD_BUKRS-LOW",
+        "from_value": "1",
+        "to_value": "17",
+        "tcode": "FBL1N",
+        "screen_number": "1000",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:42.617410",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtKD_BUKRS-LOW",
+        "from_value": "17",
+        "to_value": "1710",
+        "tcode": "FBL1N",
+        "screen_number": "1000",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:51.960400",
+      "event_type": "SCREEN_CHANGE",
+      "details": {
+        "tcode": "FBL1N",
+        "from_screen": "1000",
+        "to_screen": "120",
+        "title": "供應商明細項目顯示"
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:51.960400",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/chk[1,10]",
+        "from_value": "",
+        "to_value": "False",
+        "tcode": "FBL1N",
+        "screen_number": "120",
+        "system_default": true
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:51.960400",
+      "event_type": "STATUS_MESSAGE",
+      "details": {
+        "type": "S",
+        "text": "4,130 項目已顯示",
+        "tcode": "FBL1N",
+        "screen_number": "120"
+      }
+    }
+  ],
+  "events": [
+    {
+      "timestamp": "2026-06-11T09:55:34.973508",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/tbar[0]/okcd",
+        "from_value": "",
+        "to_value": "fbl1n",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtKD_BUKRS-LOW",
+        "from_value": "",
+        "to_value": "1710",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/radX_OPSEL",
+        "from_value": "",
+        "to_value": "True",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtPA_STIDA",
+        "from_value": "",
+        "to_value": "2026/06/11",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/radX_CLSEL",
+        "from_value": "",
+        "to_value": "False",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/radX_AISEL",
+        "from_value": "",
+        "to_value": "False",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/chkX_NORM",
+        "from_value": "",
+        "to_value": "True",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/chkX_SHBV",
+        "from_value": "",
+        "to_value": "False",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/chkX_MERK",
+        "from_value": "",
+        "to_value": "False",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/chkX_PARK",
+        "from_value": "",
+        "to_value": "False",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:36.700720",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/chkX_APAR",
+        "from_value": "",
+        "to_value": "False",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:37.920362",
+      "event_type": "TCODE_CHANGE",
+      "details": {
+        "from_tcode": "SESSION_MANAGER",
+        "to_tcode": "FBL1N",
+        "screen_number": "1000",
+        "title": "供應商明細項目顯示"
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:42.617410",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtKD_BUKRS-LOW",
+        "from_value": "1710",
+        "to_value": "1710",
+        "tcode": "FBL1N",
+        "screen_number": "1000",
+        "system_default": false
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:51.960400",
+      "event_type": "SCREEN_CHANGE",
+      "details": {
+        "tcode": "FBL1N",
+        "from_screen": "1000",
+        "to_screen": "120",
+        "title": "供應商明細項目顯示"
+      }
+    },
+    {
+      "timestamp": "2026-06-11T09:55:51.960400",
+      "event_type": "STATUS_MESSAGE",
+      "details": {
+        "type": "S",
+        "text": "4,130 項目已顯示",
+        "tcode": "FBL1N",
+        "screen_number": "120"
+      }
+    }
+  ],
+  "summary": "涉及交易: FBL1N，修改了 12 個欄位，偵測到 1 個畫面/視窗變化，共 15 個操作步驟"
+}

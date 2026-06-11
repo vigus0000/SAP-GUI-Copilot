@@ -14,6 +14,7 @@ SAP GUI Copilot — CLI 入口 (Phase 4 — Agentic Coach)
 - /ask         → 切換到 Ask Mode（問答模式）
 - /solve       → 切換到 Solve Mode（問題排解模式）
 - /auto        → 切換回 Auto Mode（自動代操）
+- /mcp         → 檢查 MCP SAP GUI server 狀態
 - /quit        → 結束程式
 """
 
@@ -30,6 +31,7 @@ from llm_brain import SAPAgent
 from sap_monitor import SAPMonitor
 from sap_recorder import SAPRecorder
 from sap_skill_library import SAPSkillLibrary
+from mcp_client import get_default_sync_client
 
 
 def env_enabled(name, default="false"):
@@ -82,7 +84,7 @@ def print_banner():
     print(f"""
 {Colors.CYAN}╔══════════════════════════════════════════════════╗
 ║                                                  ║
-║   🤖 SAP GUI Copilot  V0.8.1  (Phase 4)         ║
+║   🤖 SAP GUI Copilot  V0.9.6  (Stage 2)         ║
 ║   ─────────────────────────────────────────────   ║
 ║   用自然語言操作 SAP，告別繁瑣的 T-Code！        ║
 ║                                                  ║
@@ -98,6 +100,7 @@ def print_banner():
     /ask           切換到 Ask Mode（問答模式）
     /solve         切換到 Solve Mode（問題排解模式）
     /auto          切換回 Auto Mode（自動代操）
+    /mcp           檢查 MCP SAP GUI server 狀態
     /login         重新執行 GitHub Copilot 授權
     /reset         重置對話歷史
     /quit          結束程式{Colors.RESET}
@@ -205,6 +208,63 @@ def print_screen_scan(session):
 
     except Exception as e:
         print(f"{Colors.RED}  掃描失敗: {e}{Colors.RESET}")
+
+
+def print_mcp_diagnostics():
+    """顯示 MCP SAP GUI server 啟動與工具診斷。"""
+    def console_safe(value):
+        text = str(value or "")
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        return text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+
+    print(f"\n{Colors.CYAN}── MCP SAP GUI 診斷 ──{Colors.RESET}")
+    client = get_default_sync_client()
+    try:
+        report = client.probe(attach=True)
+    except Exception as exc:
+        report = client.launch_summary()
+        report["error"] = str(exc)
+
+    command = report.get("command", "")
+    args = report.get("args") or []
+    command_line = " ".join([command] + [str(arg) for arg in args]).strip()
+    print(f"  {Colors.WHITE}Enabled:{Colors.RESET} {report.get('enabled')}")
+    print(f"  {Colors.WHITE}Mode:{Colors.RESET} {report.get('mode') or '-'}")
+    print(f"  {Colors.WHITE}Command:{Colors.RESET} {command_line or '-'}")
+    print(f"  {Colors.WHITE}CWD:{Colors.RESET} {report.get('cwd') or '-'}")
+    print(f"  {Colors.WHITE}UV_CACHE_DIR:{Colors.RESET} {report.get('uv_cache_dir') or '-'}")
+    print(f"  {Colors.WHITE}Package:{Colors.RESET} {report.get('package') or '-'}")
+
+    available = bool(report.get("available"))
+    initialized = bool(report.get("initialized"))
+    print(f"  {Colors.WHITE}Prerequisites:{Colors.RESET} {'OK' if available else 'FAILED'}")
+    print(f"  {Colors.WHITE}Initialize:{Colors.RESET} {'OK' if initialized else 'FAILED'}")
+
+    attach = report.get("attach") or {}
+    if attach:
+        attach_text = "OK" if attach.get("attached") else attach.get("reason", "not attached")
+        if attach.get("tool"):
+            attach_text = f"{attach_text} via {attach.get('tool')}"
+        print(f"  {Colors.WHITE}SAP Attach:{Colors.RESET} {attach_text}")
+
+    tools = report.get("tools") or []
+    print(f"  {Colors.WHITE}Tool Count:{Colors.RESET} {report.get('tool_count', len(tools))}")
+    if tools:
+        sample = ", ".join(tools[:12])
+        suffix = " ..." if len(tools) > 12 else ""
+        print(f"  {Colors.WHITE}Tools:{Colors.RESET} {sample}{suffix}")
+
+    error = report.get("error") or report.get("last_error") or ""
+    if error:
+        print(f"\n{Colors.YELLOW}  Error:{Colors.RESET}")
+        print(f"{Colors.DIM}{console_safe(error)}{Colors.RESET}")
+
+    stderr_tail = report.get("stderr_tail") or ""
+    if stderr_tail:
+        tail = stderr_tail[-3000:]
+        print(f"\n{Colors.YELLOW}  Server stderr tail:{Colors.RESET}")
+        print(f"{Colors.DIM}{console_safe(tail)}{Colors.RESET}")
+    print()
 
 
 def print_recordings_list(skill_library):
@@ -681,10 +741,14 @@ def main():
                 print(f"{Colors.GREEN}  ✅ 已切換至 🟣 Auto Mode（自動代操）{Colors.RESET}")
                 print(f"{Colors.DIM}     AI 可呼叫工具操作 SAP 畫面{Colors.RESET}")
 
+            # --- /mcp ---
+            elif cmd == "/mcp":
+                print_mcp_diagnostics()
+
             # --- 未知指令 ---
             elif user_input.startswith("/"):
                 print(f"{Colors.YELLOW}  未知指令: {user_input}{Colors.RESET}")
-                print(f"{Colors.DIM}  可用指令: /scan, /record, /stop, /recordings, /play, /study, /ask, /solve, /auto, /login, /reset, /quit{Colors.RESET}")
+                print(f"{Colors.DIM}  可用指令: /scan, /record, /stop, /recordings, /play, /study, /ask, /solve, /auto, /mcp, /login, /reset, /quit{Colors.RESET}")
 
             # ===== 自然語言指令 → AI Agent =====
             else:

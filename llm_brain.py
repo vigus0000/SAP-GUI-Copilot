@@ -33,6 +33,16 @@ from sap_agent_tools import (
     confirmed_send_vkey,
     confirmed_handle_popup,
 )
+from mcp_client import MCPClientUnavailable, get_default_sync_client
+
+
+def env_enabled(name, default="true"):
+    return str(os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def env_list(name, default):
+    value = os.getenv(name, default)
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 # Study Mode 只允許使用的工具名稱
 STUDY_ALLOWED_TOOLS = {"guide_user_action", "visualize_element"}
@@ -54,12 +64,166 @@ COPILOT_RETRY_MAX_SECONDS = float(os.getenv("COPILOT_RETRY_MAX_SECONDS", "60"))
 CONVERSATION_HISTORY_LIMIT = int(os.getenv("COPILOT_HISTORY_LIMIT", "14"))
 EDITOR_CONTEXT_MAX_CHARS = int(os.getenv("EDITOR_CONTEXT_MAX_CHARS", "12000"))
 
+# Stage 2 MCP settings. MCP is the primary SAP operation path; the legacy
+# sap_agent_tools.py/pywin32 path remains as fallback during migration.
+MCP_SAP_ENABLED = env_enabled("MCP_SAP_ENABLED", "true")
+MCP_SCREEN_TOOL_CANDIDATES = env_list(
+    "MCP_SAP_SCREEN_TOOLS",
+    "sap_get_screen_elements,sap_get_screen,sap_scan_screen,sap_get_current_screen",
+)
+MCP_SESSION_INFO_TOOL_CANDIDATES = env_list(
+    "MCP_SAP_SESSION_INFO_TOOLS",
+    "sap_get_session_info,sap_get_current_session_info",
+)
+MCP_SET_FOCUS_TOOL_CANDIDATES = env_list(
+    "MCP_SAP_SET_FOCUS_TOOLS",
+    "sap_set_focus,sap_focus_element",
+)
+MCP_FAILURE_COOLDOWN_SECONDS = float(os.getenv("MCP_SAP_FAILURE_COOLDOWN_SECONDS", "30"))
+MCP_TIMING_DEBUG = env_enabled("MCP_TIMING_DEBUG", "false")
+MCP_SAP_FAST_MODE = env_enabled("MCP_SAP_FAST_MODE", "true")
+MCP_SAP_TOOL_PROFILE = os.getenv("MCP_SAP_TOOL_PROFILE", "core").strip().lower()
+MCP_FAST_SCREEN_MAX_DEPTH = int(os.getenv("MCP_FAST_SCREEN_MAX_DEPTH", "2"))
+MCP_FAST_SCREEN_CHANGEABLE_ONLY = env_enabled("MCP_FAST_SCREEN_CHANGEABLE_ONLY", "false")
+MCP_SCREEN_CACHE_ENABLED = env_enabled("MCP_SCREEN_CACHE_ENABLED", "true")
+MCP_SCREEN_CACHE_TTL_SECONDS = float(os.getenv("MCP_SCREEN_CACHE_TTL_SECONDS", "30"))
+MCP_SCREEN_CACHE_MAX_WRITES = int(os.getenv("MCP_SCREEN_CACHE_MAX_WRITES", "20"))
+MCP_EXPOSE_DISCOVERY_TO_LLM = env_enabled("MCP_EXPOSE_DISCOVERY_TO_LLM", "false")
+MCP_POPUP_USE_POPUP_TOOL_ONLY = env_enabled("MCP_POPUP_USE_POPUP_TOOL_ONLY", "true")
+MCP_FAST_SCREEN_TYPE_FILTER = os.getenv(
+    "MCP_FAST_SCREEN_TYPE_FILTER",
+    ",".join([
+        "GuiTextField",
+        "GuiCTextField",
+        "GuiPasswordField",
+        "GuiComboBox",
+        "GuiCheckBox",
+        "GuiRadioButton",
+        "GuiButton",
+        "GuiTab",
+        "GuiTableControl",
+        "GuiShell",
+        "GuiOkCodeField",
+    ]),
+)
+MCP_CORE_TOOL_NAMES = set(env_list(
+    "MCP_SAP_CORE_TOOLS",
+    ",".join([
+        "sap_connect",
+        "sap_connect_existing",
+        "sap_list_connections",
+        "sap_get_session_info",
+        "sap_get_screen_info",
+        "sap_get_screen_elements",
+        "sap_execute_transaction",
+        "sap_send_key",
+        "sap_read_field",
+        "sap_set_field",
+        "sap_set_batch_fields",
+        "sap_press_button",
+        "sap_select_menu",
+        "sap_select_checkbox",
+        "sap_select_radio_button",
+        "sap_select_combobox_entry",
+        "sap_get_combobox_entries",
+        "sap_select_tab",
+        "sap_read_textedit",
+        "sap_set_textedit",
+        "sap_set_focus",
+        "sap_read_table",
+        "sap_select_table_row",
+        "sap_select_multiple_rows",
+        "sap_get_popup_window",
+        "sap_handle_popup",
+        "sap_get_toolbar_buttons",
+        "sap_read_shell_content",
+        "sap_screenshot",
+        "sap_disconnect",
+    ]),
+))
+MCP_DYNAMIC_TOOL_GROUPS = {
+    "alv": {
+        "sap_get_alv_toolbar",
+        "sap_press_alv_toolbar_button",
+        "sap_select_alv_context_menu_item",
+        "sap_double_click_cell",
+        "sap_modify_cell",
+        "sap_set_current_cell",
+        "sap_get_column_info",
+        "sap_get_current_cell",
+        "sap_get_cell_info",
+        "sap_press_column_header",
+        "sap_select_all_rows",
+    },
+    "table": {
+        "sap_scroll_table_control",
+        "sap_get_table_control_row_info",
+        "sap_select_all_table_control_columns",
+        "sap_double_click_cell",
+        "sap_modify_cell",
+        "sap_set_current_cell",
+        "sap_get_column_info",
+        "sap_get_current_cell",
+    },
+    "tree": {
+        "sap_read_tree",
+        "sap_expand_tree_node",
+        "sap_collapse_tree_node",
+        "sap_select_tree_node",
+        "sap_double_click_tree_node",
+        "sap_double_click_tree_item",
+        "sap_click_tree_link",
+        "sap_find_tree_node_by_path",
+        "sap_search_tree_nodes",
+        "sap_get_tree_node_children",
+    },
+}
+MCP_FIELD_WRITE_TOOL_NAMES = {
+    "sap_set_field",
+    "sap_set_batch_fields",
+    "sap_select_checkbox",
+    "sap_select_radio_button",
+    "sap_select_combobox_entry",
+    "sap_set_textedit",
+    "sap_set_focus",
+}
+MCP_NAVIGATION_TOOL_NAMES = {
+    "sap_execute_transaction",
+    "sap_send_key",
+    "sap_press_button",
+    "sap_select_menu",
+    "sap_select_tab",
+    "sap_handle_popup",
+    "sap_select_table_row",
+    "sap_select_multiple_rows",
+    "sap_double_click_cell",
+    "sap_press_alv_toolbar_button",
+    "sap_select_alv_context_menu_item",
+    "sap_expand_tree_node",
+    "sap_collapse_tree_node",
+    "sap_select_tree_node",
+    "sap_double_click_tree_node",
+    "sap_double_click_tree_item",
+    "sap_click_tree_link",
+}
+MCP_DISCOVERY_TOOL_NAMES = {
+    "sap_get_session_info",
+    "sap_get_current_session_info",
+    "sap_get_screen_info",
+    "sap_get_screen_elements",
+    "sap_get_screen",
+    "sap_scan_screen",
+    "sap_get_current_screen",
+    "sap_get_popup_window",
+    "sap_screenshot",
+}
+
 # System Prompt - Auto Mode (可執行操作)
 SYSTEM_PROMPT_AUTO = """你是一個專業的 SAP GUI 操作助手。你可以透過工具來操作 SAP 系統。
 
 ## 你的能力
 1. 閱讀 SAP 畫面的結構化 JSON，理解當前畫面的狀態、欄位、按鈕
-2. 使用工具 (set_text, select_combo, read_checkbox, set_checkbox, select_table_row, read_editor_text, set_editor_text, visualize_element, click, send_vkey, set_tcode, handle_popup) 來操作 SAP 畫面
+2. 使用本輪 API 實際提供的工具操作 SAP。Stage 2 預設工具來源是 MCP (`mcp-sap-gui`)，工具名稱可能以 `sap_` 開頭；若 MCP 不可用，系統才會提供舊版 GUI COM fallback 工具 (set_text, select_combo, click, send_vkey 等)
 3. 根據狀態列訊息判斷操作是否成功
 
 ## 工作流程 (ReAct Loop)
@@ -70,12 +234,16 @@ SYSTEM_PROMPT_AUTO = """你是一個專業的 SAP GUI 操作助手。你可以�
 
 ## 重要規則
 - 操作前先仔細閱讀畫面 JSON，確認元件 ID 正確
+- 不要呼叫本輪工具清單沒有提供的工具；若工具名稱與舊版不同，依工具 description 與 parameters 判斷用途
 - 如果畫面 JSON 有 active_popup 或 popup_wnd1，代表目前有 SAP 彈出視窗；請先處理彈窗，再操作主視窗
 - 處理彈窗時優先使用 handle_popup；例如填寫彈窗「標題」後按儲存，使用 handle_popup(action="save", field_label="標題", value="...")
 - 如果 active_popup 的 title 是「錯誤」或 messages 有錯誤文字，先讀 messages 判斷原因；通常要先 handle_popup(action="ok") 關閉最上層錯誤，再依下一層彈窗的 fields 補齊空白/焦點欄位
 - screen JSON 中的 fields 會把欄位 label 與元件 ID 配對；填欄位時優先使用 fields 裡的 id 或 handle_popup(field_label=...)
 - 如果 fields 的 type 是 GuiComboBox、dropdown=true 或含 options，代表下拉式選單；必須使用 select_combo，或在彈窗中用 handle_popup 依 label 選值，不要把它當一般文字欄位 set_text
 - 下拉式選單若有 options，優先用 option key；沒有 key 時才用顯示文字
+- 使用 MCP 工具時，如果同一畫面要填 2 個以上一般文字欄位，優先一次呼叫 sap_set_batch_fields(fields={id: value, ...}, validate=false)，不要逐欄 sap_set_field
+- 如果批次填欄位後需要立即驗證或送出，使用 sap_set_batch_fields(..., validate=true)，或批次填完後再呼叫一次 sap_send_key("Enter") / sap_press_button(...)
+- 不要把 save/post/delete/confirm/release 等敏感提交操作放進批次欄位動作；這些操作仍必須走確認或由使用者明確允許
 - 如果 fields 的 type 是 GuiCheckBox 或 GuiRadioButton，讀取狀態使用 read_checkbox，設定狀態使用 set_checkbox；不要用 set_text 寫入 True/False，也不要在狀態未知時盲目 click
 - checkbox/radio 的 fields[].value 會是 "True" / "False"，selected 也會標示布林狀態；操作前先確認目前狀態，避免重複切換
 - 如果 active_popup.tables 或 tables 顯示 GuiTableControl 列資料，且任務是勾選/選擇某一列（例如 MM03「選擇檢視」彈窗中的「基本資料 1」），優先使用 select_table_row(row_text=...)；不要只 click/highlight 文字 cell，因為 checkbox 可能藏在 table 選取欄內
@@ -151,6 +319,7 @@ SYSTEM_PROMPT_STUDY = """你是一個 SAP GUI 操作教練。你的任務是根�
 你**絕對不能**替使用者執行任何寫入操作。你唯一能做的是：
 1. 使用 `guide_user_action` 工具高亮 SAP 元件並顯示操作指引，等待使用者確認完成
 2. 使用 `visualize_element` 工具高亮元件讓使用者知道要操作的位置
+3. Stage 2 會優先用 MCP 取得畫面狀態；若 MCP 不可用才會回退到舊 GUI COM 掃描
 
 ## 嚴格禁止使用的工具
 - set_text、select_combo、set_editor_text、click、send_vkey、set_tcode、handle_popup
@@ -212,6 +381,26 @@ class SAPAgent:
         self.auth = auth
         self.model = model
         self._mode = "auto"  # "auto", "ask", "solve", or "study"
+        self.mcp_client = get_default_sync_client() if MCP_SAP_ENABLED else None
+        self._mcp_all_tool_schemas = None
+        self._mcp_all_tool_names = set()
+        self._mcp_tool_schemas = None
+        self._mcp_tool_names = set()
+        self._mcp_unavailable_reason = ""
+        self._mcp_last_failure_at = 0.0
+        self._mcp_tool_hints = set()
+        self._last_screen_context_text = ""
+        self._last_screen_backend = ""
+        self._mcp_screen_cache = {
+            "fingerprint": "",
+            "container_id": "",
+            "elements_text": "",
+            "elements_at": 0.0,
+        }
+        self._mcp_last_screen_info = None
+        self._mcp_last_screen_fingerprint = ""
+        self._mcp_last_screen_events = []
+        self._mcp_recent_field_writes = {}
         self.conversation_history = [
             {"role": "system", "content": SYSTEM_PROMPT_AUTO}
         ]
@@ -285,12 +474,14 @@ class SAPAgent:
         last_error = None
         for attempt in range(COPILOT_MAX_RETRIES + 1):
             try:
+                started_at = time.perf_counter()
                 resp = requests.post(
                     COPILOT_CHAT_URL,
                     headers=headers,
                     json=payload,
                     timeout=60,
                 )
+                self._timing_log("Copilot API call", started_at)
 
                 if resp.status_code == 401:
                     # Token 過期，嘗試刷新後重試
@@ -369,6 +560,588 @@ class SAPAgent:
             f"\n{resp.text}"
         )
 
+    def _timing_log(self, label, started_at):
+        if MCP_TIMING_DEBUG:
+            elapsed = time.perf_counter() - started_at
+            print(f"\033[90m[Timing] {label}: {elapsed:.3f}s\033[0m")
+
+    def _parse_mcp_json_text(self, text):
+        value = str(text or "").strip()
+        if not value:
+            return None
+        if value.startswith("```"):
+            lines = value.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            value = "\n".join(lines).strip()
+        try:
+            return json.loads(value)
+        except Exception:
+            pass
+        first = value.find("{")
+        last = value.rfind("}")
+        if first >= 0 and last > first:
+            try:
+                return json.loads(value[first:last + 1])
+            except Exception:
+                return None
+        return None
+
+    def _extract_screen_from_mcp_payload(self, payload):
+        if not isinstance(payload, dict):
+            return None
+        if isinstance(payload.get("screen"), dict):
+            return payload["screen"]
+        if isinstance(payload.get("screen_info"), dict):
+            return payload["screen_info"]
+        validation = payload.get("validation")
+        if isinstance(validation, dict) and isinstance(validation.get("screen"), dict):
+            return validation["screen"]
+        text = payload.get("text")
+        if isinstance(text, str):
+            parsed_text = self._parse_mcp_json_text(text)
+            if isinstance(parsed_text, dict):
+                return self._extract_screen_from_mcp_payload(parsed_text)
+        content = payload.get("content")
+        if isinstance(content, list):
+            for item in content:
+                screen = self._extract_screen_from_mcp_payload(item)
+                if screen:
+                    return screen
+        return None
+
+    def _mcp_screen_fingerprint(self, screen_info):
+        if not isinstance(screen_info, dict):
+            return ""
+        keys = ("active_window", "transaction", "program", "screen_number", "title")
+        return "|".join(str(screen_info.get(key, "") or "") for key in keys)
+
+    def _mcp_screen_events_from_info(self, previous, current):
+        if not isinstance(previous, dict) or not isinstance(current, dict):
+            return []
+        events = []
+        prev_tcode = str(previous.get("transaction", "") or "")
+        curr_tcode = str(current.get("transaction", "") or "")
+        prev_screen = str(previous.get("screen_number", "") or "")
+        curr_screen = str(current.get("screen_number", "") or "")
+        prev_window = str(previous.get("active_window", "") or "")
+        curr_window = str(current.get("active_window", "") or "")
+        title = str(current.get("title", "") or "")
+
+        if curr_tcode and prev_tcode != curr_tcode:
+            events.append({
+                "event_type": "TCODE_CHANGE",
+                "from_tcode": prev_tcode,
+                "to_tcode": curr_tcode,
+                "screen_number": curr_screen,
+                "title": title,
+            })
+        elif curr_screen and prev_screen != curr_screen and prev_tcode == curr_tcode:
+            events.append({
+                "event_type": "SCREEN_CHANGE",
+                "tcode": curr_tcode,
+                "from_screen": prev_screen,
+                "to_screen": curr_screen,
+                "title": title,
+            })
+
+        if curr_window and prev_window != curr_window:
+            events.append({
+                "event_type": "ACTIVE_WINDOW_CHANGE",
+                "from_window": prev_window,
+                "to_window": curr_window,
+                "title": title,
+                "tcode": curr_tcode,
+                "screen_number": curr_screen,
+            })
+            if curr_window != "wnd[0]":
+                events.append({
+                    "event_type": "WINDOW_OPEN",
+                    "window_id": curr_window,
+                    "title": title,
+                    "tcode": curr_tcode,
+                    "screen_number": curr_screen,
+                })
+            elif prev_window and prev_window != "wnd[0]":
+                events.append({
+                    "event_type": "WINDOW_CLOSE",
+                    "window_id": prev_window,
+                    "title": str(previous.get("title", "") or ""),
+                    "tcode": curr_tcode,
+                    "screen_number": curr_screen,
+                })
+        return events
+
+    def _remember_mcp_screen_info(self, screen_info):
+        fingerprint = self._mcp_screen_fingerprint(screen_info)
+        if not fingerprint:
+            return ""
+        if (
+            self._mcp_last_screen_fingerprint
+            and fingerprint != self._mcp_last_screen_fingerprint
+        ):
+            self._mcp_recent_field_writes = {}
+        self._mcp_last_screen_info = screen_info
+        self._mcp_last_screen_fingerprint = fingerprint
+        return fingerprint
+
+    def _mcp_cached_elements_valid(self, fingerprint, container_id):
+        if not MCP_SCREEN_CACHE_ENABLED:
+            return False
+        cache = self._mcp_screen_cache
+        if not fingerprint or not cache.get("elements_text"):
+            return False
+        if cache.get("fingerprint") != fingerprint:
+            return False
+        if cache.get("container_id") != container_id:
+            return False
+        age = time.time() - float(cache.get("elements_at") or 0)
+        return age <= MCP_SCREEN_CACHE_TTL_SECONDS
+
+    def _remember_mcp_elements(self, fingerprint, container_id, elements_text):
+        if not MCP_SCREEN_CACHE_ENABLED or not fingerprint or not elements_text:
+            return
+        self._mcp_screen_cache = {
+            "fingerprint": fingerprint,
+            "container_id": container_id,
+            "elements_text": str(elements_text),
+            "elements_at": time.time(),
+        }
+
+    def _remember_mcp_field_writes(self, tool_result):
+        if not tool_result.get("success", True):
+            return
+        action = tool_result.get("action", "")
+        args = tool_result.get("_tool_args") or {}
+        writes = {}
+
+        if action == "sap_set_batch_fields":
+            fields = args.get("fields") if isinstance(args, dict) else None
+            payload = tool_result.get("mcp_payload")
+            result_statuses = payload.get("results", {}) if isinstance(payload, dict) else {}
+            if isinstance(fields, dict):
+                for field_id, value in fields.items():
+                    status = result_statuses.get(field_id)
+                    if status is None or status == "success":
+                        writes[str(field_id)] = value
+        elif action == "sap_set_field":
+            field_id = (
+                args.get("field_id")
+                or args.get("element_id")
+                or args.get("id")
+            )
+            value = args.get("value")
+            if field_id is not None:
+                writes[str(field_id)] = value
+        elif action == "sap_select_checkbox":
+            field_id = args.get("checkbox_id") or args.get("element_id") or args.get("id")
+            selected = args.get("selected")
+            if field_id is not None:
+                writes[str(field_id)] = selected
+        elif action in {"sap_select_radio_button", "sap_select_combobox_entry"}:
+            field_id = (
+                args.get("element_id")
+                or args.get("field_id")
+                or args.get("combobox_id")
+                or args.get("radio_id")
+                or args.get("id")
+            )
+            value = args.get("value", args.get("key", True))
+            if field_id is not None:
+                writes[str(field_id)] = value
+
+        if not writes:
+            return
+        self._mcp_recent_field_writes.update(writes)
+        if len(self._mcp_recent_field_writes) > MCP_SCREEN_CACHE_MAX_WRITES:
+            items = list(self._mcp_recent_field_writes.items())[-MCP_SCREEN_CACHE_MAX_WRITES:]
+            self._mcp_recent_field_writes = dict(items)
+
+    def _mcp_recent_writes_text(self):
+        if not self._mcp_recent_field_writes:
+            return ""
+        return json.dumps(
+            self._mcp_recent_field_writes,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    def _detect_mcp_tool_hints(self, screen_text):
+        lowered = str(screen_text or "").lower()
+        hints = set()
+        if any(marker in lowered for marker in ("guigridview", "alv", "grid_id")):
+            hints.add("alv")
+        if any(marker in lowered for marker in ("guitablecontrol", "table_id", "tablecontrol")):
+            hints.add("table")
+        if any(marker in lowered for marker in ("guitree", "simpletree", "columntree", "tree_id")):
+            hints.add("tree")
+        return hints
+
+    def _filter_mcp_tool_schemas(self, tools):
+        if MCP_SAP_TOOL_PROFILE == "full":
+            filtered = list(tools)
+            if not MCP_EXPOSE_DISCOVERY_TO_LLM:
+                filtered = [
+                    item for item in filtered
+                    if item.get("function", {}).get("name", "") not in MCP_DISCOVERY_TOOL_NAMES
+                ]
+            return filtered
+
+        allowed = set(MCP_CORE_TOOL_NAMES)
+        for hint in self._mcp_tool_hints:
+            allowed.update(MCP_DYNAMIC_TOOL_GROUPS.get(hint, set()))
+        if not MCP_EXPOSE_DISCOVERY_TO_LLM:
+            allowed.difference_update(MCP_DISCOVERY_TOOL_NAMES)
+
+        filtered = [
+            item for item in tools
+            if item.get("function", {}).get("name", "") in allowed
+        ]
+        return filtered or ([] if not MCP_EXPOSE_DISCOVERY_TO_LLM else list(tools))
+
+    def _get_mcp_tool_schemas(self, refresh=False, quiet=False):
+        """Return dynamic MCP tools, or an empty list when fallback should be used."""
+        if not self.mcp_client:
+            self._mcp_unavailable_reason = "MCP_SAP_ENABLED=false"
+            return []
+
+        if (
+            self._mcp_last_failure_at
+            and not refresh
+            and time.time() - self._mcp_last_failure_at < MCP_FAILURE_COOLDOWN_SECONDS
+        ):
+            if not quiet:
+                print(
+                    "\033[33m"
+                    f"[Agent] MCP 暫停重試中，改用 legacy GUI fallback: {self._mcp_unavailable_reason}"
+                    "\033[0m"
+                )
+            return []
+
+        if self._mcp_all_tool_schemas is not None and not refresh:
+            tools = self._filter_mcp_tool_schemas(self._mcp_all_tool_schemas)
+            self._mcp_all_tool_names = {
+                item.get("function", {}).get("name", "")
+                for item in self._mcp_all_tool_schemas
+                if item.get("function", {}).get("name")
+            }
+            self._mcp_tool_schemas = tools
+            self._mcp_tool_names = {
+                item.get("function", {}).get("name", "")
+                for item in tools
+                if item.get("function", {}).get("name")
+            }
+            return list(tools)
+
+        try:
+            started_at = time.perf_counter()
+            all_tools = self.mcp_client.get_available_tools(refresh=refresh)
+            self._timing_log("MCP list_tools", started_at)
+            self._mcp_all_tool_schemas = all_tools
+            self._mcp_all_tool_names = {
+                item.get("function", {}).get("name", "")
+                for item in all_tools
+                if item.get("function", {}).get("name")
+            }
+            tools = self._filter_mcp_tool_schemas(all_tools)
+            self._mcp_tool_schemas = tools
+            self._mcp_tool_names = {
+                item.get("function", {}).get("name", "")
+                for item in tools
+                if item.get("function", {}).get("name")
+            }
+            try:
+                all_tool_names = [
+                    item.get("function", {}).get("name", "")
+                    for item in all_tools
+                    if item.get("function", {}).get("name")
+                ]
+                self.mcp_client.ensure_sap_connected(all_tool_names)
+            except Exception as attach_error:
+                if not quiet:
+                    print(f"\033[33m[Agent] MCP SAP session attach 警告: {attach_error}\033[0m")
+            self._mcp_unavailable_reason = ""
+            self._mcp_last_failure_at = 0.0
+            if tools and not quiet:
+                print(
+                    "\033[90m"
+                    f"[Agent] MCP tools loaded: {len(tools)} "
+                    f"(profile={MCP_SAP_TOOL_PROFILE}, all={len(all_tools)})"
+                    "\033[0m"
+                )
+            return list(tools)
+        except (MCPClientUnavailable, TimeoutError, Exception) as e:
+            self._mcp_all_tool_schemas = None
+            self._mcp_all_tool_names = set()
+            self._mcp_tool_schemas = None
+            self._mcp_tool_names = set()
+            self._mcp_unavailable_reason = str(e)
+            self._mcp_last_failure_at = time.time()
+            last_error = getattr(self.mcp_client, "last_error", "")
+            detail = last_error or str(e)
+            if not quiet:
+                print(f"\033[33m[Agent] MCP 不可用，改用 legacy GUI fallback: {detail}\033[0m")
+            return []
+
+    def _tool_schemas_for_auto(self, screen_text=""):
+        if screen_text:
+            self._mcp_tool_hints = self._detect_mcp_tool_hints(screen_text)
+        mcp_tools = self._get_mcp_tool_schemas()
+        return mcp_tools or TOOL_SCHEMAS
+
+    def _mcp_tool_available(self, name):
+        if not self._mcp_tool_names:
+            self._get_mcp_tool_schemas(quiet=True)
+        return name in self._mcp_tool_names
+
+    def _first_available_mcp_tool(self, candidates, include_hidden=True):
+        if not self._mcp_all_tool_names and not self._mcp_tool_names:
+            self._get_mcp_tool_schemas(quiet=True)
+        available = self._mcp_all_tool_names if include_hidden else self._mcp_tool_names
+        for name in candidates:
+            if name in available:
+                return name
+        return ""
+
+    def _call_mcp_tool_text(self, tool_name, arguments=None):
+        if not self.mcp_client:
+            raise MCPClientUnavailable("MCP_SAP_ENABLED=false")
+        try:
+            started_at = time.perf_counter()
+            result = self.mcp_client.call_tool(tool_name, arguments or {})
+            self._timing_log(f"MCP call {tool_name}", started_at)
+            return result
+        except Exception as e:
+            self._mcp_unavailable_reason = str(e)
+            self._mcp_last_failure_at = time.time()
+            raise
+
+    def _hidden_discovery_tool_result(self, tool_name):
+        screen_after = {
+            "backend": "mcp_internal_context",
+            "message": (
+                "Screen discovery tools are managed internally. "
+                "Use the provided screen context and action tool results instead of rescanning."
+            ),
+        }
+        if self._mcp_last_screen_info:
+            screen_after["screen"] = self._mcp_last_screen_info
+        return {
+            "success": True,
+            "backend": "mcp_internal_context",
+            "action": tool_name,
+            "message": "Discovery tool call skipped to avoid a full screen rescan.",
+            "screen_after": screen_after,
+            "screen_summary": screen_after,
+        }
+
+    def _mcp_fast_screen_context_text(self):
+        parts = []
+        screen_info_tool = self._first_available_mcp_tool([
+            "sap_get_screen_info",
+            *MCP_SESSION_INFO_TOOL_CANDIDATES,
+        ])
+        elements_tool = self._first_available_mcp_tool([
+            "sap_get_screen_elements",
+            *MCP_SCREEN_TOOL_CANDIDATES,
+        ])
+        popup_tool = self._first_available_mcp_tool(["sap_get_popup_window"])
+
+        screen_info = None
+        active_window = "wnd[0]"
+        fingerprint = ""
+        screen_events = []
+        if screen_info_tool:
+            raw_info = self._call_mcp_tool_text(screen_info_tool, {})
+            parts.append(f"### {screen_info_tool}\n{raw_info}")
+            screen_info = self._parse_mcp_json_text(raw_info)
+            if isinstance(screen_info, dict):
+                screen_events = self._mcp_screen_events_from_info(
+                    self._mcp_last_screen_info,
+                    screen_info,
+                )
+                self._mcp_last_screen_events = screen_events
+                fingerprint = self._remember_mcp_screen_info(screen_info)
+                active_window = str(screen_info.get("active_window") or "wnd[0]")
+
+        if screen_events:
+            parts.append(
+                "### mcp_screen_events\n"
+                f"{json.dumps(screen_events, ensure_ascii=False, indent=2)}"
+            )
+
+        skip_elements = False
+        if popup_tool and active_window != "wnd[0]":
+            raw_popup = self._call_mcp_tool_text(popup_tool, {})
+            parts.append(f"### {popup_tool}\n{raw_popup}")
+            skip_elements = MCP_POPUP_USE_POPUP_TOOL_ONLY
+
+        if elements_tool and not skip_elements:
+            container_id = f"{active_window}/usr" if active_window.startswith("wnd[") else "wnd[0]/usr"
+            if self._mcp_cached_elements_valid(fingerprint, container_id):
+                raw_elements = self._mcp_screen_cache.get("elements_text", "")
+                parts.append(f"### {elements_tool} fast filtered (cache hit)\n{raw_elements}")
+            else:
+                try:
+                    raw_elements = self._call_mcp_tool_text(elements_tool, {
+                        "container_id": container_id,
+                        "max_depth": MCP_FAST_SCREEN_MAX_DEPTH,
+                        "type_filter": MCP_FAST_SCREEN_TYPE_FILTER,
+                        "changeable_only": MCP_FAST_SCREEN_CHANGEABLE_ONLY,
+                    })
+                    self._remember_mcp_elements(fingerprint, container_id, raw_elements)
+                    parts.append(f"### {elements_tool} fast filtered\n{raw_elements}")
+                except Exception:
+                    cache = self._mcp_screen_cache
+                    if cache.get("fingerprint") == fingerprint and cache.get("container_id") == container_id:
+                        raw_elements = cache.get("elements_text", "")
+                        parts.append(f"### {elements_tool} fast filtered (stale cache fallback)\n{raw_elements}")
+                    else:
+                        raise
+
+        recent_writes = self._mcp_recent_writes_text()
+        if recent_writes:
+            parts.append(
+                "### mcp_local_field_write_cache\n"
+                "The screen elements above may contain older values for fields changed locally in this run.\n"
+                f"{recent_writes}"
+            )
+
+        return "\n\n".join(parts) if parts else None
+
+    def _mcp_screen_context_text(self):
+        """Get screen context from MCP as raw text for LLM consumption."""
+        if not self.mcp_client:
+            return None
+
+        tools = self._get_mcp_tool_schemas(quiet=True)
+        if not tools:
+            return None
+
+        parts = []
+        session_tool = self._first_available_mcp_tool(MCP_SESSION_INFO_TOOL_CANDIDATES)
+        screen_tool = self._first_available_mcp_tool(MCP_SCREEN_TOOL_CANDIDATES)
+
+        try:
+            started_at = time.perf_counter()
+            if MCP_SAP_FAST_MODE:
+                fast_text = self._mcp_fast_screen_context_text()
+                if fast_text:
+                    self._last_screen_context_text = fast_text
+                    self._last_screen_backend = "mcp"
+                    self._mcp_tool_hints = self._detect_mcp_tool_hints(fast_text)
+                    self._timing_log("MCP fast screen scan", started_at)
+                    return fast_text
+
+            if session_tool:
+                parts.append(
+                    f"### {session_tool}\n"
+                    f"{self._call_mcp_tool_text(session_tool, {})}"
+                )
+            if screen_tool:
+                parts.append(
+                    f"### {screen_tool}\n"
+                    f"{self._call_mcp_tool_text(screen_tool, {})}"
+                )
+        except Exception as e:
+            self._mcp_unavailable_reason = str(e)
+            self._mcp_last_failure_at = time.time()
+            print(f"\033[33m[Agent] MCP 畫面掃描失敗，改用 legacy GUI fallback: {e}\033[0m")
+            return None
+
+        if not parts:
+            self._mcp_unavailable_reason = "MCP server did not expose a supported screen tool"
+            return None
+
+        text = "\n\n".join(parts)
+        self._last_screen_context_text = text
+        self._last_screen_backend = "mcp"
+        self._mcp_tool_hints = self._detect_mcp_tool_hints(text)
+        return text
+
+    def _local_screen_context_text(self, session, purpose="auto"):
+        screen_state = scan_sap_screen(session)
+        if purpose in ("ask", "solve"):
+            screen_state = self._attach_editor_text_context(session, screen_state)
+        context = self._solve_context(screen_state) if purpose == "solve" else self._screen_context(screen_state)
+        return json.dumps(context, ensure_ascii=False, indent=2), screen_state
+
+    def _screen_context_text(self, session, purpose="auto"):
+        """
+        Prefer MCP optimized screen output; fallback to legacy scanner.
+
+        Returns:
+            tuple[str, str] -> (context_text, backend)
+        """
+        started_at = time.perf_counter()
+        mcp_text = self._mcp_screen_context_text()
+        if mcp_text:
+            self._timing_log(f"screen context ({purpose}, mcp)", started_at)
+            return mcp_text, "mcp"
+
+        local_text, _screen_state = self._local_screen_context_text(session, purpose=purpose)
+        self._timing_log(f"screen context ({purpose}, legacy)", started_at)
+        return local_text, "legacy"
+
+    def _legacy_tool_name_for_mcp(self, tool_name):
+        aliases = {
+            "sap_set_text": "set_text",
+            "sap_set_field": "set_text",
+            "sap_enter_text": "set_text",
+            "sap_select_combo": "select_combo",
+            "sap_select_dropdown": "select_combo",
+            "sap_click": "click",
+            "sap_press_button": "click",
+            "sap_send_vkey": "send_vkey",
+            "sap_send_key": "send_vkey",
+            "sap_set_tcode": "set_tcode",
+            "sap_start_transaction": "set_tcode",
+            "sap_handle_popup": "handle_popup",
+            "sap_read_checkbox": "read_checkbox",
+            "sap_set_checkbox": "set_checkbox",
+            "sap_select_table_row": "select_table_row",
+            "sap_get_screen_elements": "scan_sap_screen",
+            "sap_get_screen": "scan_sap_screen",
+            "sap_scan_screen": "scan_sap_screen",
+            "sap_read_editor_text": "read_editor_text",
+            "sap_set_editor_text": "set_editor_text",
+            "sap_visualize_element": "visualize_element",
+            "sap_set_focus": "visualize_element",
+        }
+        return aliases.get(tool_name, tool_name)
+
+    def _normalize_legacy_tool_args(self, legacy_tool_name, args):
+        normalized = dict(args or {})
+
+        if "id" in normalized and "element_id" not in normalized:
+            normalized["element_id"] = normalized.pop("id")
+        if "element" in normalized and "element_id" not in normalized:
+            normalized["element_id"] = normalized.pop("element")
+        if "field_id" in normalized and "element_id" not in normalized:
+            normalized["element_id"] = normalized.pop("field_id")
+
+        if legacy_tool_name == "set_text":
+            if "text" in normalized and "value" not in normalized:
+                normalized["value"] = normalized.pop("text")
+        elif legacy_tool_name == "select_combo":
+            if "text" in normalized and "value" not in normalized and "key" not in normalized:
+                normalized["value"] = normalized["text"]
+        elif legacy_tool_name == "send_vkey":
+            if "key" in normalized and "vkey" not in normalized:
+                normalized["vkey"] = normalized.pop("key")
+        elif legacy_tool_name == "set_tcode":
+            if "transaction" in normalized and "tcode" not in normalized:
+                normalized["tcode"] = normalized.pop("transaction")
+            if "transaction_code" in normalized and "tcode" not in normalized:
+                normalized["tcode"] = normalized.pop("transaction_code")
+        elif legacy_tool_name == "set_checkbox":
+            if "checked" in normalized and "selected" not in normalized:
+                normalized["selected"] = normalized.pop("checked")
+
+        return normalized
+
     def _execute_tool_call(self, session, tool_name, tool_args):
         """
         執行 LLM 回傳的 Tool Call。
@@ -388,6 +1161,89 @@ class SAPAgent:
 
         # 呼叫工具函數（所有工具的第一個參數都是 session）
         return tool_func(session, **tool_args)
+
+    def _execute_primary_tool_call(self, session, tool_name, tool_args):
+        """Execute MCP tool first; fallback to legacy GUI tool when possible."""
+        if (
+            tool_name in MCP_DISCOVERY_TOOL_NAMES
+            and not MCP_EXPOSE_DISCOVERY_TO_LLM
+            and self.mcp_client
+        ):
+            return self._hidden_discovery_tool_result(tool_name)
+
+        if self._mcp_tool_available(tool_name):
+            try:
+                result_text = self._call_mcp_tool_text(tool_name, tool_args)
+                parsed = self._parse_mcp_json_text(result_text)
+                success = not str(result_text).startswith("MCP tool error")
+                if isinstance(parsed, dict) and parsed.get("error"):
+                    success = False
+                result = {
+                    "success": success,
+                    "backend": "mcp",
+                    "action": tool_name,
+                    "_tool_args": tool_args,
+                    "result": result_text,
+                }
+                if parsed is not None:
+                    result["mcp_payload"] = parsed
+                    screen = self._extract_screen_from_mcp_payload(parsed)
+                    if screen:
+                        result["mcp_screen"] = screen
+                return result
+            except Exception as e:
+                legacy_name = self._legacy_tool_name_for_mcp(tool_name)
+                if legacy_name in TOOL_FUNCTIONS:
+                    print(
+                        "\033[33m"
+                        f"[Agent] MCP tool {tool_name} 失敗，改用 legacy fallback {legacy_name}: {e}"
+                        "\033[0m"
+                    )
+                    legacy_args = self._normalize_legacy_tool_args(legacy_name, tool_args)
+                    result = self._execute_tool_call(session, legacy_name, legacy_args)
+                    result["backend"] = "legacy_fallback"
+                    result["mcp_error"] = str(e)
+                    result["_legacy_tool_name"] = legacy_name
+                    result["_legacy_tool_args"] = legacy_args
+                    return result
+
+                return {
+                    "success": False,
+                    "backend": "mcp",
+                    "action": tool_name,
+                    "error": f"MCP tool failed and no legacy fallback is available: {e}",
+                }
+
+        legacy_name = self._legacy_tool_name_for_mcp(tool_name)
+        legacy_args = self._normalize_legacy_tool_args(legacy_name, tool_args)
+        result = self._execute_tool_call(session, legacy_name, legacy_args)
+        result["backend"] = "legacy"
+        result["_legacy_tool_name"] = legacy_name
+        result["_legacy_tool_args"] = legacy_args
+        return result
+
+    def _execute_study_tool_call(self, session, tool_name, tool_args):
+        """
+        Execute local Study tools.
+
+        For guide_user_action, try MCP focus first when available, then use the
+        existing local guide/visualize implementation as fallback and prompt UI.
+        """
+        if tool_name == "guide_user_action":
+            element_id = str((tool_args or {}).get("element_id", "") or "")
+            focus_tool = self._first_available_mcp_tool(MCP_SET_FOCUS_TOOL_CANDIDATES)
+            if element_id and focus_tool:
+                try:
+                    self._call_mcp_tool_text(focus_tool, {"element_id": element_id})
+                except Exception:
+                    try:
+                        self._call_mcp_tool_text(focus_tool, {"id": element_id})
+                    except Exception as e:
+                        print(f"\033[33m[Agent] MCP focus 失敗，改用 legacy guide fallback: {e}\033[0m")
+
+        result = self._execute_tool_call(session, tool_name, tool_args)
+        result["backend"] = "local_study"
+        return result
 
     def _screen_summary(self, screen_state):
         """產生給終端機看的簡短畫面摘要。"""
@@ -635,8 +1491,94 @@ class SAPAgent:
 
     def _attach_screen_after_tool(self, session, tool_result):
         """工具執行後重新掃描 SAP，讓下一輪推理看到最新畫面。"""
+        action = tool_result.get("action", "")
+        if tool_result.get("backend") == "mcp" and MCP_SAP_FAST_MODE:
+            if tool_result.get("mcp_screen"):
+                if action in MCP_FIELD_WRITE_TOOL_NAMES:
+                    self._remember_mcp_field_writes(tool_result)
+                screen_events = self._mcp_screen_events_from_info(
+                    self._mcp_last_screen_info,
+                    tool_result["mcp_screen"],
+                )
+                self._mcp_last_screen_events = screen_events
+                self._remember_mcp_screen_info(tool_result["mcp_screen"])
+                screen_after = {
+                    "backend": "mcp_result",
+                    "screen": tool_result["mcp_screen"],
+                }
+                if screen_events:
+                    screen_after["events"] = screen_events
+                tool_result["screen_after"] = screen_after
+                tool_result["screen_summary"] = screen_after
+                return tool_result
+
+            if action in MCP_FIELD_WRITE_TOOL_NAMES:
+                self._remember_mcp_field_writes(tool_result)
+                screen_after = {
+                    "backend": "mcp_fast_cached",
+                    "message": "Screen was not rescanned after a non-navigation write.",
+                    "action": action,
+                    "arguments": {
+                        key: value
+                        for key, value in (tool_result.get("_tool_args") or {}).items()
+                        if key not in {"password", "BCODE"}
+                    },
+                }
+                tool_result["screen_after"] = screen_after
+                tool_result["screen_summary"] = screen_after
+                return tool_result
+
+            if action in MCP_NAVIGATION_TOOL_NAMES:
+                screen_tool = self._first_available_mcp_tool(["sap_get_screen_info"])
+                if screen_tool:
+                    try:
+                        started_at = time.perf_counter()
+                        screen_text = self._call_mcp_tool_text(screen_tool, {})
+                        self._timing_log("MCP smart screen_after", started_at)
+                        screen_after = {
+                            "backend": "mcp_screen_info",
+                            "raw": screen_text,
+                        }
+                        parsed = self._parse_mcp_json_text(screen_text)
+                        if parsed is not None:
+                            if isinstance(parsed, dict):
+                                screen_events = self._mcp_screen_events_from_info(
+                                    self._mcp_last_screen_info,
+                                    parsed,
+                                )
+                                self._mcp_last_screen_events = screen_events
+                                self._remember_mcp_screen_info(parsed)
+                                if screen_events:
+                                    screen_after["events"] = screen_events
+                            screen_after["screen"] = parsed
+                        tool_result["screen_after"] = screen_after
+                        tool_result["screen_summary"] = screen_after
+                        return tool_result
+                    except Exception as e:
+                        tool_result["screen_after_error"] = f"MCP 輕量掃描失敗: {e}"
+                        return tool_result
+
+            tool_result["screen_after"] = {
+                "backend": "mcp_fast_skipped",
+                "message": "Screen scan skipped for this MCP tool result.",
+            }
+            tool_result["screen_summary"] = tool_result["screen_after"]
+            return tool_result
+
+        if tool_result.get("backend") == "mcp":
+            mcp_text = self._mcp_screen_context_text()
+            if mcp_text:
+                tool_result["screen_after"] = {
+                    "backend": "mcp",
+                    "raw": mcp_text,
+                }
+                tool_result["screen_summary"] = tool_result["screen_after"]
+                return tool_result
+
         try:
+            started_at = time.perf_counter()
             screen_state = scan_sap_screen(session)
+            self._timing_log("legacy screen_after scan", started_at)
             screen_summary = self._screen_summary(screen_state)
             tool_result["screen_after"] = screen_summary
             tool_result["screen_summary"] = screen_summary
@@ -806,14 +1748,11 @@ class SAPAgent:
         """
         # 掃描當前畫面
         print("\033[90m[Agent] 正在掃描 SAP 畫面...\033[0m")
-        screen_state = scan_sap_screen(session)
-        screen_state = self._attach_editor_text_context(session, screen_state)
-        context = self._solve_context(screen_state) if self._mode == "solve" else self._screen_context(screen_state)
-        screen_json = json.dumps(context, ensure_ascii=False, indent=2)
+        screen_text, screen_backend = self._screen_context_text(session, purpose=self._mode)
 
         # 組合訊息
         combined_parts = [
-            f"## 當前 SAP 畫面狀態\n```json\n{screen_json}\n```",
+            f"## 當前 SAP 畫面狀態（{screen_backend}）\n```text\n{screen_text}\n```",
         ]
 
         if extra_context:
@@ -854,13 +1793,15 @@ class SAPAgent:
         """
         # Step 1: 掃描當前畫面
         print("\033[90m[Agent] 正在掃描 SAP 畫面...\033[0m")
-        screen_state = scan_sap_screen(session)
-        screen_json = json.dumps(self._screen_context(screen_state), ensure_ascii=False, indent=2)
+        screen_text, screen_backend = self._screen_context_text(session, purpose="auto")
+        tool_schemas = self._tool_schemas_for_auto(screen_text)
+        tool_backend = "mcp" if tool_schemas != TOOL_SCHEMAS else "legacy"
 
         # 組合訊息：畫面狀態 + 使用者指令
         combined_message = (
-            f"## 當前 SAP 畫面狀態\n"
-            f"```json\n{screen_json}\n```\n\n"
+            f"## 當前 SAP 畫面狀態（{screen_backend}）\n"
+            f"```text\n{screen_text}\n```\n\n"
+            f"## 工具來源\n{tool_backend}\n\n"
             f"## 使用者指令\n{user_message}"
         )
 
@@ -876,7 +1817,7 @@ class SAPAgent:
             try:
                 response = self._call_copilot_api(
                     messages=self.conversation_history,
-                    tools=TOOL_SCHEMAS,
+                    tools=tool_schemas,
                 )
             except RuntimeError as e:
                 error_msg = f"LLM 呼叫失敗: {e}"
@@ -923,11 +1864,13 @@ class SAPAgent:
 
                 interrupted = False
                 try:
-                    tool_result = self._execute_tool_call(session, tool_name, tool_args)
+                    tool_result = self._execute_primary_tool_call(session, tool_name, tool_args)
 
                     if tool_result.get("requires_confirmation"):
+                        confirm_tool_name = tool_result.get("_legacy_tool_name") or tool_result.get("action") or tool_name
+                        confirm_tool_args = tool_result.get("_legacy_tool_args") or tool_args
                         tool_result = self._handle_confirmation(
-                            session, tool_result, tool_name, tool_args
+                            session, tool_result, confirm_tool_name, confirm_tool_args
                         )
 
                     tool_result = self._attach_screen_after_tool(session, tool_result)
@@ -1010,11 +1953,10 @@ class SAPAgent:
         Study Mode: 使用 ReAct Loop 但只允許引導工具（guide_user_action, visualize_element）。
         """
         print("\033[90m[Agent] 正在掃描 SAP 畫面...\033[0m")
-        screen_state = scan_sap_screen(session)
-        screen_json = json.dumps(self._screen_context(screen_state), ensure_ascii=False, indent=2)
+        screen_text, screen_backend = self._screen_context_text(session, purpose="study")
 
         combined_parts = [
-            f"## 當前 SAP 畫面狀態\n```json\n{screen_json}\n```",
+            f"## 當前 SAP 畫面狀態（{screen_backend}）\n```text\n{screen_text}\n```",
         ]
         if extra_context:
             combined_parts.append(f"\n## SOP 操作指南\n{extra_context}")
@@ -1079,7 +2021,7 @@ class SAPAgent:
                     print(f"\033[36m[Agent] 呼叫工具: {tool_name}({tool_args})\033[0m")
                     interrupted = False
                     try:
-                        tool_result = self._execute_tool_call(session, tool_name, tool_args)
+                        tool_result = self._execute_study_tool_call(session, tool_name, tool_args)
                         tool_result = self._attach_screen_after_tool(session, tool_result)
                     except KeyboardInterrupt:
                         interrupted = True
