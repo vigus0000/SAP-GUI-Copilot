@@ -8,6 +8,7 @@ The UI thread only renders widgets; SAP COM and LLM calls run in a worker thread
 import json
 import os
 import queue
+import re
 import threading
 import time
 import tkinter as tk
@@ -23,17 +24,20 @@ from sap_agent_tools import (
     confirmed_click,
     confirmed_handle_popup,
     confirmed_send_vkey,
+    inspect_study_target,
     scan_sap_screen,
     visualize_element,
 )
 from sap_core import SAPConnection
+from sap_knowledge_library import SAPKnowledgeLibrary
 from sap_monitor import SAPMonitor
 from sap_recorder import SAPRecorder
 from sap_skill_library import SAPSkillLibrary
+from sap_table_inspector import format_table_inspection, inspect_current_tables
 from mcp_client import get_default_sync_client
 
 
-APP_VERSION = "0.10.0"
+APP_VERSION = "0.12.1"
 
 MODE_LABELS = {
     "auto": "Auto",
@@ -49,7 +53,8 @@ def env_enabled(name, default="false"):
 
 def parse_study_request(raw_text):
     text = str(raw_text or "").strip()
-    allow_draft = env_enabled("STUDY_ALLOW_DRAFT", "false")
+    require_draft_flag = env_enabled("STUDY_REQUIRE_DRAFT_FLAG", "false")
+    allow_draft = (not require_draft_flag) or env_enabled("STUDY_ALLOW_DRAFT", "true")
     save_draft = env_enabled("STUDY_SAVE_DRAFT_SKILL", "false")
 
     tokens = text.split()
@@ -94,7 +99,36 @@ def _screen_brief(screen_state):
     return "\n".join(lines)
 
 
-def _build_ad_hoc_study_context(goal, screen_state):
+def _compact_study_text(value, max_lines=5, max_chars=520):
+    lines = [line.strip() for line in str(value or "").splitlines() if line.strip()]
+    if not lines:
+        return ""
+    text = "\n".join(lines[:max_lines])
+    if len(text) > max_chars:
+        text = text[:max_chars].rstrip() + "..."
+    if len(lines) > max_lines:
+        text += "\n..."
+    return text
+
+
+def _normalize_study_choices(choices):
+    if not choices:
+        return []
+    if isinstance(choices, str):
+        raw_items = re.split(r"[,，;；\n]", choices)
+    elif isinstance(choices, (list, tuple)):
+        raw_items = choices
+    else:
+        raw_items = []
+    result = []
+    for item in raw_items:
+        text = str(item or "").strip()
+        if text:
+            result.append(text)
+    return result[:6]
+
+
+def _build_ad_hoc_study_context(goal, screen_state, evidence_pack=""):
     return f"""# Ad-hoc Study Goal: {goal}
 
 This is an explicit exploratory draft. No existing SOP or verified skill was found.
@@ -102,12 +136,15 @@ This is an explicit exploratory draft. No existing SOP or verified skill was fou
 ## Current SAP Screen
 {_screen_brief(screen_state)}
 
+## Evidence Pack
+{evidence_pack or "- No evidence pack was built."}
+
 ## Coach Rules
 - First tell the user this is a draft guide without a recorded SOP.
-- Use the current SAP screen as the source of truth.
+- Use evidence priority: formal skill/recording > promoted skill > draft > imported knowledge > official search > community/general search > LLM prior.
+- Every candidate flow must show module, business_cycle, source, and confidence.
 - Do not present SAP common knowledge guesses as verified facts.
-- If the T-Code, field, business meaning, or next action is uncertain, ask the user or recommend recording a real SOP with `/record`.
-- You may suggest candidate T-Codes only when clearly labeled as candidates that require user confirmation.
+- If the T-Code, field, business meaning, or next action is uncertain, ask the user to confirm the first key T-Code / flow direction or recommend recording a real SOP with `/record`.
 - Guide the user with `guide_user_action` and `visualize_element`; do not operate SAP directly.
 - If a needed value is user-specific, ask the user to enter it in SAP and confirm.
 - Finish with a draft summary and list which steps still require recording or human verification.
@@ -176,6 +213,7 @@ class SAPCopilotWorker(threading.Thread):
         self.recorder = None
         self.monitor = None
         self.skill_library = None
+        self.knowledge_library = None
         self.ready = False
         self.study_context = ""
         self.prompt_counter = 0
@@ -245,6 +283,7 @@ class SAPCopilotWorker(threading.Thread):
             llm_brain.TOOL_FUNCTIONS["guide_user_action"] = self._guide_user_action_ui
             self.recorder = SAPRecorder()
             self.skill_library = SAPSkillLibrary()
+            self.knowledge_library = SAPKnowledgeLibrary()
             self.ready = True
             self.log(
                 "Connected: "
@@ -278,6 +317,8 @@ class SAPCopilotWorker(threading.Thread):
                 self._scan()
             elif action == "mcp_probe":
                 self._mcp_probe()
+            elif action == "inspect_table":
+                self._inspect_table()
             elif action == "reset":
                 self.agent.reset_conversation()
                 self.log("Conversation reset.")
@@ -352,38 +393,82 @@ class SAPCopilotWorker(threading.Thread):
             "error": f"No UI confirmation handler for {tool_name}.",
         }
 
-    def _guide_user_action_ui(self, session, element_id: str, instruction: str):
+    def _guide_user_action_ui(
+        self,
+        session,
+        element_id: str,
+        instruction: str,
+        reason: str = "",
+        confidence: str = "",
+        source: str = "",
+        choices=None,
+        expected_response_type: str = "confirm",
+    ):
+        target = inspect_study_target(
+            session,
+            element_id=element_id,
+            expected_response_type=expected_response_type,
+            instruction=instruction,
+        )
+        display_choices = _normalize_study_choices(choices)
+        if not target.get("actionable"):
+            self.log(f"Study target invalid: {target.get('error')}")
+            return {
+                "success": False,
+                "action": "guide_user_action",
+                "element_id": target.get("element_id", element_id),
+                "element_type": target.get("element_type", ""),
+                "instruction": instruction,
+                "reason": reason,
+                "confidence": confidence,
+                "source": source,
+                "choices": display_choices,
+                "expected_response_type": expected_response_type,
+                "target_actionable": False,
+                "error": target.get("error", "Study target is not actionable."),
+                "retry_advice": target.get("retry_advice", ""),
+            }
+
         viz_result = {}
-        current_value = ""
-        if element_id:
+        target_id = target.get("element_id", "") or ""
+        current_value = target.get("current_value", "")
+        if target_id:
             try:
                 viz_result = visualize_element(
                     session,
-                    element_id=element_id,
+                    element_id=target_id,
                     duration_seconds=1.2,
                     set_focus=True,
                 )
             except Exception as exc:
                 viz_result = {"success": False, "error": str(exc)}
 
-            try:
-                element = session.FindById(element_id)
-                for attr in ("Text", "Key", "Value"):
-                    value = getattr(element, attr, None)
-                    if value not in (None, ""):
-                        current_value = str(value)
-                        break
-            except Exception:
-                pass
+        display_instruction = _compact_study_text(instruction, max_lines=5, max_chars=520)
+        display_reason = _compact_study_text(reason, max_lines=1, max_chars=180)
 
-        prompt_lines = [instruction]
-        if element_id:
-            prompt_lines.append(f"\nElement: {element_id}")
+        prompt_lines = [display_instruction or instruction]
+        if display_reason:
+            prompt_lines.append(f"\n理由: {display_reason}")
+        if source or confidence:
+            prompt_lines.append(f"來源/信心: {source or '未標示來源'} / {confidence or '未標示信心'}")
+        if display_choices:
+            prompt_lines.append("選項:")
+            for index, choice in enumerate(display_choices, 1):
+                prompt_lines.append(f"{index}. {choice}")
+        if target_id:
+            prompt_lines.append(f"\nElement: {target_id}")
+        if target.get("element_type"):
+            prompt_lines.append(f"Element type: {target.get('element_type')}")
         if current_value:
             prompt_lines.append(f"Current value: {current_value}")
         if viz_result and not viz_result.get("success"):
             prompt_lines.append(f"Highlight failed: {viz_result.get('error', '')}")
-        prompt_lines.append("\n完成後直接按 OK；可輸入回覆內容，或輸入 /skip、/done。")
+        if expected_response_type == "choice":
+            prompt_lines.append("\n請輸入選項編號或文字；直接 OK 代表接受建議選項。")
+        elif expected_response_type == "value":
+            prompt_lines.append("\n請輸入本次要使用的值；或輸入 /skip、/done。")
+        else:
+            prompt_lines.append("\n完成後直接按 OK；可輸入回覆內容，或輸入 /skip、/done。")
 
         user_response = str(self._request_prompt(
             "Study Step",
@@ -406,8 +491,15 @@ class SAPCopilotWorker(threading.Thread):
         return {
             "success": True,
             "action": "guide_user_action",
-            "element_id": element_id,
+            "element_id": target_id,
+            "element_type": target.get("element_type", ""),
             "instruction": instruction,
+            "reason": reason,
+            "confidence": confidence,
+            "source": source,
+            "choices": display_choices,
+            "expected_response_type": expected_response_type,
+            "target_actionable": True,
             "user_response": user_response,
             "user_confirmed": not skipped,
             "skipped": skipped,
@@ -420,6 +512,8 @@ class SAPCopilotWorker(threading.Thread):
     def _set_mode(self, mode):
         self._ensure_ready()
         self.agent.set_mode(mode)
+        if mode != "study":
+            self.study_context = ""
         self.log(f"Mode switched to {MODE_LABELS.get(mode, mode)}.")
 
     def _handle_text(self, text):
@@ -442,6 +536,11 @@ class SAPCopilotWorker(threading.Thread):
             self._scan()
         elif cmd == "/mcp":
             self._mcp_probe()
+        elif cmd == "/inspect":
+            if not arg or arg.lower() in {"table", "tables"}:
+                self._inspect_table()
+            else:
+                self.log("Usage: /inspect table")
         elif cmd == "/reset":
             self.agent.reset_conversation()
             self.log("Conversation reset.")
@@ -464,10 +563,136 @@ class SAPCopilotWorker(threading.Thread):
                 self.log("Usage: /study [SOP name] | /study --draft [goal] | /study --save-draft [goal]")
             else:
                 self._run_study(arg)
+        elif cmd == "/knowledge":
+            self._handle_knowledge_command(arg)
+        elif cmd == "/skills":
+            self._handle_skills_command(arg)
         elif cmd == "/connect":
             self._connect()
         else:
-            self.log("Available commands: /scan, /mcp, /record, /stop, /recordings, /play, /study, /ask, /solve, /auto, /reset")
+            self.log("Available commands: /scan, /inspect table, /mcp, /record, /stop, /recordings, /play, /study, /knowledge, /skills, /ask, /solve, /auto, /reset")
+
+    def _parse_inline_options(self, text):
+        options = {}
+        remaining = str(text or "").strip()
+        for name in ("--type", "--tags"):
+            pattern = re.compile(rf"\s{name}\s+([^\s]+)", re.I)
+            match = pattern.search(f" {remaining}")
+            if match:
+                options[name.lstrip("-").replace("-", "_")] = match.group(1).strip().strip('"')
+                remaining = pattern.sub(" ", f" {remaining}", count=1).strip()
+        return remaining.strip().strip('"'), options
+
+    def _knowledge_usage(self):
+        return "\n".join([
+            "Usage:",
+            "/knowledge import <path-or-url> [--type official|company|community] [--tags tag1,tag2]",
+            "/knowledge search <query>",
+            "/knowledge distill <path-or-query>",
+            "/knowledge rebuild",
+            "/skills drafts",
+            "/skills promote <draft-relative-path-or-title>",
+        ])
+
+    def _format_knowledge_entries(self, entries):
+        if not entries:
+            return "No results."
+        lines = []
+        for index, item in enumerate(entries, 1):
+            source = item.get("source_url") or item.get("source_path") or item.get("relative_path") or item.get("path") or ""
+            lines.append(
+                f"{index}. {item.get('document_title') or item.get('title')} "
+                f"[{item.get('module', '')} > {item.get('business_cycle', '')}] "
+                f"confidence={item.get('confidence', '')} score={item.get('score', '-')}"
+            )
+            if item.get("tcode"):
+                lines.append(f"   T-Code: {', '.join(item.get('tcode', []))}")
+            if source:
+                lines.append(f"   {source}")
+            if item.get("summary"):
+                lines.append(f"   {item.get('summary', '')[:180]}")
+        return "\n".join(lines)
+
+    def _handle_knowledge_command(self, arg):
+        self._ensure_ready()
+        parts = str(arg or "").strip().split(maxsplit=1)
+        if not parts:
+            self.log(self._knowledge_usage())
+            return
+        subcommand = parts[0].lower()
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        try:
+            if subcommand == "import":
+                source, options = self._parse_inline_options(rest)
+                if not source:
+                    self.log(self._knowledge_usage())
+                    return
+                entries = self.knowledge_library.import_source(
+                    source,
+                    source_type=options.get("type", ""),
+                    tags=options.get("tags", ""),
+                )
+                self.log(f"Imported {len(entries)} hierarchy nodes:\n{self._format_knowledge_entries(entries[:8])}")
+            elif subcommand == "search":
+                if not rest:
+                    self.log(self._knowledge_usage())
+                    return
+                self.log("Knowledge search:\n" + self._format_knowledge_entries(
+                    self.knowledge_library.search(rest, include_drafts=True)
+                ))
+            elif subcommand == "distill":
+                if not rest:
+                    self.log(self._knowledge_usage())
+                    return
+                drafts = self.knowledge_library.distill(rest)
+                lines = [f"Created {len(drafts)} draft skill(s):"]
+                for item in drafts:
+                    lines.append(
+                        f"- {item.get('document_title')} "
+                        f"[{item.get('module')} > {item.get('business_cycle')}] "
+                        f"{item.get('relative_path')}"
+                    )
+                self.log("\n".join(lines))
+            elif subcommand == "rebuild":
+                self.log(f"Knowledge index rebuilt: {self.knowledge_library.rebuild()}")
+            else:
+                self.log(self._knowledge_usage())
+        except Exception as exc:
+            self.log(f"Knowledge command failed: {exc}")
+
+    def _handle_skills_command(self, arg):
+        self._ensure_ready()
+        parts = str(arg or "").strip().split(maxsplit=1)
+        if not parts:
+            self.log(self._knowledge_usage())
+            return
+        subcommand = parts[0].lower()
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        try:
+            if subcommand == "drafts":
+                drafts = self.knowledge_library.list_drafts()
+                if not drafts:
+                    self.log("No draft skill found.")
+                    return
+                lines = ["Draft skills:"]
+                for index, draft in enumerate(drafts, 1):
+                    lines.append(
+                        f"{index}. {draft.get('title')} "
+                        f"[{draft.get('module')} > {draft.get('business_cycle')}] "
+                        f"{draft.get('relative_path')}"
+                    )
+                self.log("\n".join(lines))
+            elif subcommand == "promote":
+                if not rest:
+                    self.log(self._knowledge_usage())
+                    return
+                path = self.knowledge_library.promote_draft(rest)
+                self.skill_library.rebuild_index()
+                self.log(f"Draft promoted to formal skill: {path}")
+            else:
+                self.log(self._knowledge_usage())
+        except Exception as exc:
+            self.log(f"Skills command failed: {exc}")
 
     def _extra_context_for_current_mode(self):
         if self.agent.mode == "study":
@@ -496,6 +721,17 @@ class SAPCopilotWorker(threading.Thread):
     def _scan(self):
         screen = scan_sap_screen(self._session())
         self.log("Screen scan:\n" + self._format_screen(screen))
+
+    def _inspect_table(self):
+        session = self._session()
+        report = inspect_current_tables(
+            session=session,
+            max_depth=10,
+            max_rows=10,
+            include_rows=False,
+            use_focus=True,
+        )
+        self.log(format_table_inspection(report))
 
     def _mcp_probe(self):
         client = get_default_sync_client()
@@ -654,16 +890,22 @@ class SAPCopilotWorker(threading.Thread):
         if not skill_found:
             if not allow_draft_study:
                 self.log(
-                    "No SOP / skill found. Study Mode was not started to avoid unverified guidance.\n"
+                    "No SOP / skill found. STUDY_REQUIRE_DRAFT_FLAG=true, so Study Mode requires an explicit --draft flag.\n"
                     "Use /record [name] to capture a real flow, /solve for troubleshooting, "
-                    "or /study --draft [goal] for an explicit exploratory draft."
+                    "or /study --draft [goal] for an explicit exploratory draft. "
+                    "Set STUDY_REQUIRE_DRAFT_FLAG=false to let /study [goal] start evidence-driven draft guidance."
                 )
                 return
-            sop_text = _build_ad_hoc_study_context(goal, initial_screen)
+            evidence_pack = self.knowledge_library.build_evidence_pack(
+                goal,
+                initial_screen,
+                skill_library=self.skill_library,
+            )
+            sop_text = _build_ad_hoc_study_context(goal, initial_screen, evidence_pack)
             request = (
                 f"No existing SOP / skill was found for '{goal}'. "
-                "This is an explicit exploratory draft. Guide from the current SAP screen, "
-                "state uncertainty, and finish with a draft summary."
+                "This is an explicit exploratory draft. Guide from the evidence pack and current SAP screen, "
+                "state source/confidence, ask for confirmation when evidence is weak, and finish with a draft summary."
             )
         elif skill_data.get("format") == "markdown" and skill_data.get("sop_text"):
             sop_text = skill_data["sop_text"]
@@ -699,9 +941,9 @@ class SAPCopilotWorker(threading.Thread):
                 self.log(f"Draft skill saved: {path}")
             elif not skill_found:
                 self.log("Draft study was not saved. Use /record for a verified SOP or /study --save-draft to save an exploratory draft.")
-        finally:
-            self.study_context = ""
-            self.agent.set_mode("auto")
+            self.log("Study Mode remains active. Use Auto/Ask/Solve buttons or /auto to leave Study Mode.")
+        except Exception as exc:
+            self.log(f"Study Mode failed: {exc}")
 
 
 class SAPCopilotUI:
@@ -761,6 +1003,7 @@ class SAPCopilotUI:
         actions = ttk.Frame(outer)
         actions.pack(fill=tk.X, pady=(0, 8))
         ttk.Button(actions, text="Scan", command=lambda: self.worker.submit("scan")).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(actions, text="Inspect", command=lambda: self.worker.submit("inspect_table")).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(actions, text="MCP", command=lambda: self.worker.submit("mcp_probe")).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(actions, text="Reset", command=lambda: self.worker.submit("reset")).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(actions, text="Record", command=self._record_dialog).pack(side=tk.LEFT, padx=(0, 6))

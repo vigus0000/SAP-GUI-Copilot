@@ -136,6 +136,10 @@ MCP_SAP_FAST_MODE=true
 MCP_SAP_TOOL_PROFILE=core
 MCP_FAST_SCREEN_MAX_DEPTH=2
 MCP_FAST_SCREEN_CHANGEABLE_ONLY=false
+MCP_EVIDENCE_SCREEN_MAX_DEPTH=5
+MCP_EVIDENCE_SCREEN_TYPE_FILTER=GuiTextField,GuiCTextField,GuiPasswordField,GuiComboBox,GuiCheckBox,GuiRadioButton,GuiButton,GuiTab,GuiTableControl,GuiGridView,GuiShell,GuiLabel,GuiStatusbar,GuiOkCodeField
+MCP_EVIDENCE_LEGACY_FALLBACK_ON_EMPTY=true
+MCP_EVIDENCE_MIN_ELEMENT_COUNT=1
 MCP_SCREEN_CACHE_ENABLED=true
 MCP_SCREEN_CACHE_TTL_SECONDS=30
 MCP_SCREEN_CACHE_MAX_WRITES=20
@@ -143,6 +147,22 @@ MCP_EXPOSE_DISCOVERY_TO_LLM=false
 MCP_POPUP_USE_POPUP_TOOL_ONLY=true
 MCP_ATTACH_ELEMENTS_AFTER_NAV=true
 MCP_ATTACH_ELEMENTS_ON_FIELD_FAILURE=true
+MCP_READ_TABLES_IN_CONTEXT=true
+MCP_READ_SHELLS_IN_CONTEXT=true
+MCP_TABLE_CONTEXT_MAX_TABLES=3
+MCP_TABLE_CONTEXT_MAX_ROWS=25
+MCP_TABLE_CONTEXT_MAX_COLUMNS=12
+MCP_TABLE_CONTEXT_MAX_SCHEMA_COLUMNS=80
+MCP_TABLE_CONTEXT_MAX_CELL_CHARS=160
+MCP_TABLE_CONTEXT_DISCOVERY_DEPTH=6
+MCP_TABLE_CONTEXT_SCHEMA_FIRST=true
+MCP_TABLE_CONTEXT_BROAD_DISCOVERY_ON_EMPTY=true
+MCP_TABLE_CONTEXT_BROAD_DISCOVERY_DEPTH=10
+MCP_TABLE_CONTEXT_INSPECT_ON_EMPTY=true
+MCP_TABLE_CONTEXT_INSPECT_INCLUDE_ROWS=false
+MCP_TABLE_CONTEXT_MAX_CANDIDATES=12
+MCP_TABLE_CONTEXT_TYPE_FILTER=GuiGridView,GuiTableControl,GuiShell
+MCP_SHELL_CONTEXT_MAX_CHARS=4000
 MCP_FAST_SCREEN_TYPE_FILTER=GuiTextField,GuiCTextField,GuiPasswordField,GuiComboBox,GuiCheckBox,GuiRadioButton,GuiButton,GuiTab,GuiTableControl,GuiShell,GuiOkCodeField
 MCP_SAP_SCREEN_TOOLS=sap_get_screen_elements,sap_get_screen,sap_scan_screen,sap_get_current_screen
 MCP_SAP_SESSION_INFO_TOOLS=sap_get_session_info,sap_get_current_session_info
@@ -161,8 +181,14 @@ STUDY_SCREEN_CHANGE_POLL_SECONDS=0.5
 STUDY_PROMPT_FIELD_VALUES=true
 STUDY_AUTOFILL_PROMPTED_VALUES=false
 STUDY_INITIAL_TCODES=SESSION_MANAGER,S000
-STUDY_ALLOW_DRAFT=false
+STUDY_REQUIRE_DRAFT_FLAG=false
+STUDY_ALLOW_DRAFT=true
 STUDY_SAVE_DRAFT_SKILL=false
+STUDY_KNOWLEDGE_MAX_MATCHES=5
+STUDY_WEB_SEARCH_ENABLED=false
+STUDY_WEB_SEARCH_MAX_RESULTS=5
+STUDY_WEB_SEARCH_TIMEOUT_SECONDS=8
+STUDY_WEB_SEARCH_CACHE_TTL_SECONDS=86400
 ```
 
 #### Copilot 模型建議
@@ -239,6 +265,16 @@ Phase 2.1 新增 MCP speed mode：
 - `MCP_ATTACH_ELEMENTS_AFTER_NAV=true` 時，交易切換、畫面跳轉或 Enter 後的 screen change 會自動附上 filtered elements，避免下一輪猜欄位 ID
 - `MCP_ATTACH_ELEMENTS_ON_FIELD_FAILURE=true` 時，欄位寫入失敗會自動讀一次 filtered elements 並放入 `field_write_recovery`，讓下一輪直接用正確 ID 重試
 - `MCP_SAP_FAST_MODE=true` 時，初始畫面只抓 `sap_get_screen_info` 與 filtered `sap_get_screen_elements`
+- `MCP_READ_TABLES_IN_CONTEXT=true` 時，Agent 會優先用 MCP 的 `sap_read_table` 讀取目前畫面中的 `GuiGridView` / `GuiTableControl` / ALV 報表，並把壓縮後的 `mcp_table_report_context` 放入 Ask / Solve / Study / Auto 的畫面 context
+- `MCP_TABLE_CONTEXT_MAX_TABLES`、`MCP_TABLE_CONTEXT_MAX_ROWS`、`MCP_TABLE_CONTEXT_MAX_COLUMNS` 控制自動附上的表格數、列數與資料列欄數；大型報表只會附上前幾列，需要更多資料時再由 Agent 分頁呼叫 `sap_read_table(start_row=...)`
+- `MCP_TABLE_CONTEXT_MAX_SCHEMA_COLUMNS=80` 會獨立控制欄位 schema 的保留上限；因此「顯示所有欄位」會優先列出完整 `columns` / `column_info`，但 `rows[].cells` 仍只保留前幾欄以控制 token。
+- `MCP_TABLE_CONTEXT_SCHEMA_FIRST=true` 時，會先用 `sap_read_table(columns_only=true)` 讀表格欄位 schema，再讀 rows；因此即使 ME51N 項目概觀目前沒有可讀列資料，Ask Mode 仍可回答「有哪些欄位」
+- `MCP_TABLE_CONTEXT_BROAD_DISCOVERY_ON_EMPTY=true` 時，若 filtered discovery 沒找到 `GuiTableControl` / `GuiShell`，會做一次較深的廣域候選掃描，從 element id / name / text 中找 table/grid/shell 特徵，改善 ME51N 項目概觀這類深層或非標準 type 控件
+- `MCP_TABLE_CONTEXT_INSPECT_ON_EMPTY=true` 時，若一般 discovery 仍無法穩定定位表格，Agent 會優先呼叫 custom MCP tool `sap_inspect_tables`，用 focused control、parent id probing、broad discovery 與 schema-first 讀取來定位深層表格。
+- 若 Ask Mode 仍顯示 `tables[]` 為空，可先在 SAP 表格任一儲存格或欄位標題點一下，再執行 `/inspect table` 或 UI 的 `Inspect` 按鈕；系統會列出 focused element、候選 table id、可讀欄位與錯誤原因。
+- `MCP_READ_SHELLS_IN_CONTEXT=true` 時，若 `GuiShell` 不是表格但可讀文字或 HTML，會用 `sap_read_shell_content` 補充 shell/report 內容摘要
+- `MCP_EVIDENCE_SCREEN_MAX_DEPTH=5` 時，Ask / Solve / Study 會用較深的 MCP elements 掃描並包含 `GuiLabel`，讓 ME51N、ME5A、ALV、Splitter Layout 等深層畫面能讀到欄位文字；Auto 仍使用 `MCP_FAST_SCREEN_MAX_DEPTH=2` 以維持速度
+- `MCP_EVIDENCE_LEGACY_FALLBACK_ON_EMPTY=true` 時，若 MCP 只讀到交易碼/標題但沒有欄位、表格或 shell 內容，Ask / Solve / Study 會附上 `legacy_screen_summary_fallback`，避免回答「畫面元素無法讀到」後只給通用 SAP 教材
 - `MCP_SCREEN_CACHE_ENABLED=true` 時，每輪只用 `sap_get_screen_info` 檢查畫面 fingerprint；同一畫面會復用上一輪 elements，避免重複讀完整畫面
 - `MCP_SCREEN_CACHE_TTL_SECONDS` 控制 elements cache 有效時間；一般欄位寫入會另以 local write cache 補充本輪最新值
 - `MCP_EXPOSE_DISCOVERY_TO_LLM=false` 時，`sap_get_screen_elements`、`sap_get_screen_info`、`sap_get_popup_window` 等讀畫面工具只由 agent 內部使用，不提供給 Copilot 主動呼叫
@@ -284,9 +320,16 @@ Phase 3 已將 `sap_monitor.py` 改為 MCP-first polling：
 | `/stop` | 停止錄製並儲存 SOP 檔案 |
 | `/recordings` | 列出所有 SOP / Skill（`skills/` 優先，其次 `recordings/`） |
 | `/play [名稱]` | 顯示指定 SOP / Skill 的完整操作步驟 |
-| `/study [名稱]` | 執行指定 SOP / Skill，找不到時預設停止，避免沒有錄製依據時亂教 |
-| `/study --draft [目標]` | 明確啟動探索草稿；AI 只能依目前 SAP 畫面與使用者確認引導，不會自動保存 |
+| `/inspect table` | 以 MCP 優先、legacy fallback 檢查目前 SAP 畫面可讀的表格/ALV 欄位與候選 ID |
+| `/study [名稱或目標]` | 優先執行指定 SOP / Skill；找不到時會建立 evidence pack 並進入受控探索草稿 |
+| `/study --draft [目標]` | 明確啟動探索草稿；效果等同未知 `/study [目標]`，但語意更清楚 |
 | `/study --save-draft [目標]` | 明確啟動探索草稿，完成後保存為 Markdown skill 草稿 |
+| `/knowledge import <path-or-url>` | 匯入官方文件、公司 SOP、Markdown、PDF、HTML、DOCX 或網頁，建立 knowledge index |
+| `/knowledge search <query>` | 搜尋 knowledge / draft evidence |
+| `/knowledge distill <path-or-query>` | 依來源資料蒸餾成 `module > business_cycle > document` 階層 draft skill |
+| `/knowledge rebuild` | 依已保存文件重建 knowledge metadata |
+| `/skills drafts` | 依 module → business cycle → document 顯示 draft skill |
+| `/skills promote <draft>` | 將 draft skill 提升為正式 `skills/` skill 並更新索引 |
 
 Record Mode 使用 polling snapshot diff，不依賴不穩定的 SAP COM events。監控器會在背景 thread 內重新取得 SAP session，並偵測：
 
@@ -304,9 +347,34 @@ Record Mode 使用 polling snapshot diff，不依賴不穩定的 SAP COM events�
 
 Study Mode 透過 `sap_skill_library.py` 讀取 `skills/` 與 `recordings/` 中的 SOP，並以其內容作為互動式引導參考。若兩邊有同名項目，`skills/` 會優先，適合放置整理後的穩定教學流程。
 
-若 `/study [名稱]` 找不到既有 SOP / Skill，系統預設不會啟動教學，避免 AI 在沒有錄製依據時把推測當成流程。建議先使用 `/record [名稱]` 錄製一次真實操作，或用 `/solve` 針對當前畫面卡關取得處理建議。
+若 `/study [名稱]` 找不到既有 SOP / Skill，v0.11 起會先建立 evidence pack，再進入受控探索草稿。教練必須標示 module、business_cycle、來源、信心與未知項目；若 evidence 不足，第一步會先請使用者確認 T-Code 或流程方向，而不是直接把推測當成正式流程。低信心情境會先提出 2-3 個候選方向讓使用者選擇，不會同時要求輸入 T-Code 與業務欄位。
 
-若只是要探索未知流程，必須明確使用 `/study --draft [目標]`。草稿模式會先標示不確定性，只依目前 SAP 畫面、狀態列、彈窗、可見欄位與使用者確認引導，不會把候選 T-Code 或 SAP 常識說成已驗證事實，也不會自動保存。若確定要把探索結果留作草稿 skill，可使用 `/study --save-draft [目標]`，或在 `.env` 設定 `STUDY_SAVE_DRAFT_SKILL=true`。
+若仍希望回到舊版「找不到 skill 就停止」的保守行為，可設定 `STUDY_REQUIRE_DRAFT_FLAG=true`，之後只有 `/study --draft [目標]` 或 `STUDY_ALLOW_DRAFT=true` 才會允許探索。草稿模式不會自動保存；若確定要把探索結果留作 skill，可使用 `/study --save-draft [目標]`，或在 `.env` 設定 `STUDY_SAVE_DRAFT_SKILL=true`。
+
+### Knowledge 與階層式 Skill 蒸餾
+
+無錄製 Study Mode 會先建立 evidence pack，而不是直接依模型常識教學。Evidence pack 會整理：
+
+- 目前 SAP 畫面摘要
+- 相似正式 skill / recording
+- `skills/_drafts/` 中的階層式 draft
+- `knowledge/_knowledge_index.json` 中的匯入文件
+- 選擇性即時網搜結果（需 `STUDY_WEB_SEARCH_ENABLED=true`）
+
+Evidence pack 會另外產生 `Evidence Summary`，包含 `evidence_level`、`best_confidence`、`should_confirm_flow` 與 `recommended_source`。Study Mode 會依這些欄位決定能否直接進入操作引導；若只有 `llm_prior_only` 或 `should_confirm_flow=true`，必須先做流程方向確認。
+
+資料匯入後會以「所屬模組 → 業務循環 → 文件」建立節點，例如 `MM > Material Master > 物料查詢SOP.md`。索引會保存 `module`、`business_cycle`、`document_title`、`source_path/url`、`source_type`、`tags`、`tcode`、`confidence`、`content_hash` 等 metadata。若同一份文件跨多個模組或循環，會保留同一來源與 hash，但產生多個候選節點。
+
+蒸餾流程不會直接寫入正式 `skills/`：
+
+```bash
+/knowledge import docs/mm03_material_master.md --type company --tags MM,MM03,物料
+/knowledge distill 查詢物料
+/skills drafts
+/skills promote MM/Material_Master/mm03_material_master.md
+```
+
+`/knowledge distill` 會把草稿放在 `skills/_drafts/<module>/<business_cycle>/<document>.md`，內容包含目的、適用情境、前提條件、T-Code、操作步驟、使用者需確認資料、風險、來源、信心與未驗證項目。只有 `/skills promote` 後，草稿才會變成正式 Study skill 並被 `/study` 優先命中。
 
 Skill 草稿保存會先清理自然語句，避免整句話直接變成檔名。例如 `/study --save-draft 教我如何查詢物料` 會保存為 `skills/查詢物料.md`，同時保留原始查詢作為別名；之後輸入 `/study 查詢物料` 或 `/study 教我如何查詢物料` 都會命中同一份 skill。`/recordings` 也會依正規化名稱去重，避免同一流程重複顯示。
 
@@ -327,6 +395,9 @@ Study Mode 預設採互動式參考引導流程；錄製值與錄製畫面不是
 - AI 教練會優先檢查目前畫面 `fields[].value`；欄位已有值時，會引導確認沿用，而不是要求重新輸入 SOP 舊值
 - 使用者在 SAP GUI 手動輸入後，agent 會讀回欄位值並確認是否符合本次值
 - 若教練提示使用者選擇選項，`guide_user_action()` 會把輸入內容作為 `user_response` 回傳給 Study Mode；例如選擇「結束教學」會直接收斂並產生摘要，避免重複詢問
+- `guide_user_action()` 會把「要做什麼」放在短 instruction，並把原因、來源、信心與候選選項拆成獨立欄位；UI 會自動壓縮過長內容，避免 Study Step 視窗變成大段推理文字。
+- 輸入值類提示必須指向真實可寫欄位；若模型傳入 `wnd[0]/usr`、container、label 或 status bar，工具會拒絕彈窗並回傳 `target_actionable=false`，要求重新定位或先引導使用者揭露欄位
+- 若 SAP 狀態列提示必填欄位，但目前 scan 沒有該欄位 ID，Study Mode 應引導使用者透過表格水平捲動、項目明細、版面/個人設定或欄位搜尋把欄位顯示出來，再進行填值
 - 若驗證不符合，可選擇重試輸入、接受目前值、略過或中止
 - 畫面跳轉事件代表錄製時偵測到頁面變化；若沒有更細的按鈕事件，Study Mode 會先嘗試 F8/Execute，若該 vkey 未啟用則改送 Enter
 - 畫面跳轉送出後會掃描 SAP，確認 T-Code / screen 已到錄製目標；若仍停在原畫面、出現必填欄位彈窗或狀態列錯誤，會進入 retry/manual/skip/abort recovery
@@ -334,6 +405,7 @@ Study Mode 預設採互動式參考引導流程；錄製值與錄製畫面不是
 - Recovery 偵測到彈窗內有空白或必填欄位時，Enter / `g` 會啟動 guided popup recovery：逐欄高亮、提示填值、讀回驗證，最後送出彈窗並重新確認原 SOP 目標畫面
 - 自動步驟失敗時可選擇 retry、manual、skip 或 abort，不會直接卡死
 - 自動步驟完成後固定等待 5 秒；人工步驟由使用者按 Enter 控制節奏，不再額外等待
+- Study Mode 不會在完成一輪教學回覆後自動切回 Auto Mode；要離開教學需明確輸入 `/auto`、`/ask`、`/solve`，或在 UI 按對應模式按鈕
 
 `STUDY_ADAPTIVE_MODE=true` 是預設值，代表 SOP 是參考資料而不是絕對腳本。`STUDY_HUMAN_FIELD_INPUT=true` 目的是避免像 SE38 ABAP editor 這類 SAP GUI 特殊控制元件因格式不同而無法可靠讀寫。`STUDY_FOCUS_HUMAN_FIELDS=true` 會在提示前嘗試將游標移到欄位並高亮，`STUDY_VISUALIZE_SECONDS` 控制高亮停留秒數。`STUDY_PROMPT_FIELD_VALUES=true` 會把錄製值當成可覆寫的參考參數；`STUDY_AUTOFILL_PROMPTED_VALUES=false` 代表預設由使用者在 SAP GUI 手動輸入並由 agent 驗證。若要改回舊式全自動欄位重放，可將 human input 設為 `false`。
 
@@ -409,9 +481,11 @@ SAP_Copilot/
 ├── sap_monitor.py       # 背景 Polling 監控器
 ├── sap_recorder.py      # SOP 錄製管理器
 ├── sap_skill_library.py # Phase 3 SOP / Skill Library
+├── sap_knowledge_library.py # Study evidence / knowledge / draft distillation
 ├── sap_login.py         # SAP GUI 自動登入腳本
 ├── plan.md              # 開發計劃藍圖
-├── skills/              # 整理後的穩定教學 Skill (JSON)
+├── knowledge/           # 匯入文件、正規化文字與 knowledge index
+├── skills/              # 整理後的穩定教學 Skill；_drafts/ 存放蒸餾草稿
 ├── recordings/          # SOP 錄製檔案 (JSON)
 └── .venv/               # Python 虛擬環境
 ```

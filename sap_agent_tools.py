@@ -11,6 +11,7 @@ SAP GUI Scanner & Actor 工具集
 - 敏感操作（Save/Post）標記需要人工確認
 """
 
+import os
 import re
 import time
 
@@ -27,6 +28,11 @@ except Exception:
 
 
 MAX_WINDOW_SCAN = 6
+LEGACY_REPORT_MAX_TABLES = 3
+LEGACY_REPORT_MAX_ROWS = 25
+LEGACY_REPORT_MAX_COLUMNS = 12
+LEGACY_REPORT_MAX_SCHEMA_COLUMNS = int(os.getenv("MCP_TABLE_CONTEXT_MAX_SCHEMA_COLUMNS", "80"))
+LEGACY_REPORT_MAX_CELL_CHARS = 160
 
 
 def _safe_get_attr(obj, attr, default=None):
@@ -677,8 +683,227 @@ def _extract_tables(elements, max_rows=40):
             if row_text:
                 row["text"] = row_text
             rows.append(row)
-        tables.append({"id": table["id"], "rows": rows})
+        columns = []
+        seen_columns = set()
+        for row in rows:
+            for cell in row.get("cells", []):
+                column_index = cell.get("column")
+                if column_index in seen_columns:
+                    continue
+                seen_columns.add(column_index)
+                columns.append({
+                    "index": column_index,
+                    "name": cell.get("name", ""),
+                    "title": cell.get("name", ""),
+                })
+        columns.sort(key=lambda item: item.get("index", 9999))
+        tables.append({"id": table["id"], "columns": columns, "rows": rows})
     return tables
+
+
+def _read_table_control_schema(session, element_id):
+    table = _safe_find_by_id(session, element_id)
+    if not table:
+        return None
+    if _get_element_type_name(table) != "GuiTableControl":
+        return None
+
+    columns_obj = _safe_get_attr(table, "Columns", None)
+    count = _safe_get_attr(columns_obj, "Count", 0)
+    try:
+        count = int(count)
+    except Exception:
+        count = 0
+    if count < 1:
+        return None
+
+    columns = []
+    for index in range(min(count, LEGACY_REPORT_MAX_SCHEMA_COLUMNS)):
+        title = ""
+        tooltip = ""
+        try:
+            column_obj = columns_obj(index)
+            title = str(_safe_get_attr(column_obj, "Title", "") or "")
+            tooltip = str(_safe_get_attr(column_obj, "Tooltip", "") or "")
+        except Exception:
+            pass
+        name = ""
+        try:
+            cell = table.GetCell(0, index)
+            name = str(_safe_get_attr(cell, "Name", "") or "")
+        except Exception:
+            pass
+        columns.append({
+            "index": index,
+            "name": name or title or f"col_{index}",
+            "title": title or name or f"col_{index}",
+            "tooltip": tooltip,
+        })
+
+    try:
+        row_count = int(_safe_get_attr(table, "RowCount", 0) or 0)
+    except Exception:
+        row_count = 0
+    try:
+        visible_rows = int(_safe_get_attr(table, "VisibleRowCount", 0) or 0)
+    except Exception:
+        visible_rows = 0
+
+    return {
+        "id": element_id,
+        "table_type": "GuiTableControl",
+        "columns": columns,
+        "column_count": count,
+        "total_rows": row_count,
+        "visible_rows": visible_rows,
+        "rows": [],
+        "columns_only": True,
+        "columns_truncated": count > len(columns),
+        "row_columns_truncated": count > LEGACY_REPORT_MAX_COLUMNS,
+    }
+
+
+def _extract_table_control_schemas(session, elements):
+    schemas = []
+    seen = set()
+    for elem in elements:
+        elem_id = elem.get("id", "")
+        elem_type = elem.get("type", "")
+        if not elem_id or elem_id in seen:
+            continue
+        if elem_type != "GuiTableControl":
+            continue
+        seen.add(elem_id)
+        schema = _read_table_control_schema(session, elem_id)
+        if schema:
+            schemas.append(schema)
+            if len(schemas) >= LEGACY_REPORT_MAX_TABLES:
+                break
+    return schemas
+
+
+def _merge_table_schema_context(tables, schemas):
+    by_id = {table.get("id", ""): table for table in tables if table.get("id")}
+    for schema in schemas:
+        table_id = schema.get("id", "")
+        existing = by_id.get(table_id)
+        if existing:
+            if not existing.get("columns"):
+                existing["columns"] = schema.get("columns", [])
+            existing["column_count"] = schema.get("column_count", len(existing.get("columns", [])))
+            existing["table_type"] = schema.get("table_type", existing.get("table_type", ""))
+            existing["total_rows"] = schema.get("total_rows", existing.get("total_rows"))
+            existing["visible_rows"] = schema.get("visible_rows", existing.get("visible_rows"))
+            continue
+        tables.append(schema)
+
+
+def _shorten_report_cell(value):
+    if value is None:
+        return ""
+    text = str(value)
+    if len(text) > LEGACY_REPORT_MAX_CELL_CHARS:
+        return text[:LEGACY_REPORT_MAX_CELL_CHARS].rstrip() + "..."
+    return text
+
+
+def _read_alv_like_table(session, element_id):
+    element = _safe_find_by_id(session, element_id)
+    if not element:
+        return None
+
+    row_count = _safe_get_attr(element, "RowCount", None)
+    column_count = _safe_get_attr(element, "ColumnCount", None)
+    if row_count is None or column_count is None:
+        return None
+
+    get_cell_value = _callable_member(element, "GetCellValue")
+    if not get_cell_value:
+        return None
+
+    try:
+        row_count = int(row_count)
+        column_count = int(column_count)
+    except Exception:
+        return None
+    if row_count < 1 or column_count < 1:
+        return None
+
+    columns = []
+    for index in range(min(column_count, LEGACY_REPORT_MAX_SCHEMA_COLUMNS)):
+        column_name = ""
+        try:
+            column_name = element.ColumnOrder(index)
+        except Exception:
+            column_name = f"col_{index}"
+        title = ""
+        try:
+            title = element.GetDisplayedColumnTitle(column_name)
+        except Exception:
+            title = column_name
+        columns.append({"name": str(column_name), "title": str(title or column_name)})
+
+    row_columns = columns[:LEGACY_REPORT_MAX_COLUMNS]
+    rows = []
+    for row_index in range(min(row_count, LEGACY_REPORT_MAX_ROWS)):
+        try:
+            element.firstVisibleRow = row_index
+        except Exception:
+            pass
+        cells = []
+        row_text_parts = []
+        for column in row_columns:
+            value = None
+            try:
+                value = get_cell_value(row_index, column["name"])
+            except Exception:
+                pass
+            text = _shorten_report_cell(value)
+            cells.append({
+                "name": column["name"],
+                "title": column.get("title", ""),
+                "text": text,
+            })
+            if text:
+                row_text_parts.append(text)
+        rows.append({
+            "row": row_index,
+            "text": " | ".join(row_text_parts),
+            "cells": cells,
+        })
+
+    return {
+        "id": element_id,
+        "table_type": "GuiGridView",
+        "total_rows": row_count,
+        "rows_returned": len(rows),
+        "columns": columns,
+        "row_columns": row_columns,
+        "rows": rows,
+        "rows_truncated": row_count > len(rows),
+        "columns_truncated": column_count > len(columns),
+        "row_columns_truncated": column_count > len(row_columns),
+    }
+
+
+def _extract_report_tables(session, elements):
+    """Read visible ALV/report rows from GuiShell/GuiGridView controls."""
+    report_tables = []
+    seen = set()
+    for elem in elements:
+        elem_id = elem.get("id", "")
+        elem_type = elem.get("type", "")
+        if not elem_id or elem_id in seen:
+            continue
+        if elem_type not in {"GuiShell", "GuiGridView"}:
+            continue
+        seen.add(elem_id)
+        table = _read_alv_like_table(session, elem_id)
+        if table:
+            report_tables.append(table)
+            if len(report_tables) >= LEGACY_REPORT_MAX_TABLES:
+                break
+    return report_tables
 
 
 def _extract_window_messages(elements):
@@ -763,6 +988,217 @@ def _normalize_element_infos(elements):
             elem["id"] = _short_element_id(elem["id"])
 
 
+def _get_focus_element_object(session):
+    containers = [session, _get_window(session)]
+    active_window = _get_window(session)
+    active_id = _window_id(active_window)
+    if active_id:
+        containers.append(_safe_find_by_id(session, active_id))
+    containers.append(_safe_find_by_id(session, "wnd[0]"))
+
+    for container in containers:
+        if not container:
+            continue
+        for attr in ("GuiFocus", "SystemFocus", "Focus"):
+            focus = _safe_get_attr(container, attr, None)
+            if focus:
+                return focus, attr
+    return None, ""
+
+
+TABLE_INSPECT_TYPES = {"GuiGridView", "GuiCtrlGridView", "GuiTableControl", "GuiShell"}
+TABLE_INSPECT_ID_PATTERNS = (
+    "/tbl",
+    "tbl",
+    "grid",
+    "alv",
+    "shellcont/shell",
+    "cntl",
+)
+
+
+def _looks_like_table_candidate(info):
+    elem_type = str(info.get("type", "") or "")
+    if elem_type in TABLE_INSPECT_TYPES:
+        return True
+    blob = " ".join(
+        str(info.get(key, "") or "")
+        for key in ("id", "name", "text", "tooltip")
+    ).lower()
+    return any(pattern in blob for pattern in TABLE_INSPECT_ID_PATTERNS)
+
+
+def _focus_parent_candidates(focused_obj):
+    candidates = []
+    seen = set()
+    current = focused_obj
+    depth = 0
+    while current is not None and depth < 12:
+        info = _extract_element_info(current) or {}
+        elem_id = _short_element_id(info.get("id", ""))
+        if elem_id and elem_id not in seen:
+            seen.add(elem_id)
+            info["id"] = elem_id
+            info["candidate_source"] = "focus_parent"
+            candidates.append(info)
+        current = _safe_get_attr(current, "Parent", None)
+        depth += 1
+    return candidates
+
+
+def _id_parent_table_candidates(element_id):
+    candidates = []
+    seen = set()
+    parts = [part for part in str(element_id or "").split("/") if part]
+    for index in range(len(parts), 1, -1):
+        candidate_id = "/".join(parts[:index])
+        lowered = candidate_id.lower()
+        if not any(pattern in lowered for pattern in TABLE_INSPECT_ID_PATTERNS):
+            continue
+        if candidate_id in seen:
+            continue
+        seen.add(candidate_id)
+        candidates.append({
+            "id": candidate_id,
+            "type": "",
+            "name": "",
+            "text": "",
+            "candidate_source": "focus_id_parent",
+        })
+    return candidates
+
+
+def _table_candidates_from_elements(elements, source="element_discovery"):
+    candidates = []
+    for elem in elements or []:
+        elem_id = _short_element_id(elem.get("id", ""))
+        if not elem_id:
+            continue
+        item = dict(elem)
+        item["id"] = elem_id
+        item.setdefault("candidate_source", source)
+        if _looks_like_table_candidate(item):
+            candidates.append(item)
+    return candidates
+
+
+def _read_table_candidate(session, table_id, max_rows=10, include_rows=False):
+    schema = _read_table_control_schema(session, table_id)
+    if schema:
+        return schema
+    table = _read_alv_like_table(session, table_id, max_rows=max_rows)
+    if table:
+        if not include_rows:
+            table = dict(table)
+            table["rows"] = []
+            table["rows_returned"] = 0
+            table["columns_only"] = True
+        return table
+    return None
+
+
+def inspect_sap_tables(session, container_id="", max_depth=10, max_rows=10, include_rows=False, use_focus=True):
+    """Locate readable table/grid controls using focus, parent IDs, and broad scan."""
+    _wait_for_session_ready(session)
+    active_window_id = _get_active_window_id(session) or "wnd[0]"
+    if not container_id:
+        container_id = f"{active_window_id}/usr" if active_window_id.startswith("wnd[") else "wnd[0]/usr"
+
+    candidates = []
+    seen = set()
+
+    def add_candidate(info):
+        if not info:
+            return
+        item = dict(info)
+        elem_id = _short_element_id(item.get("id", ""))
+        if not elem_id or elem_id in seen:
+            return
+        item["id"] = elem_id
+        if not _looks_like_table_candidate(item):
+            return
+        seen.add(elem_id)
+        candidates.append(item)
+
+    focused_info = None
+    if use_focus:
+        focus_obj, focus_attr = _get_focus_element_object(session)
+        focused_info = _extract_element_info(focus_obj) if focus_obj else None
+        if focused_info:
+            focused_info["id"] = _short_element_id(focused_info.get("id", ""))
+            focused_info["focus_attr"] = focus_attr
+            focused_info["candidate_source"] = "focus"
+            add_candidate(focused_info)
+            for item in _id_parent_table_candidates(focused_info.get("id", "")):
+                add_candidate(item)
+        for item in _focus_parent_candidates(focus_obj):
+            add_candidate(item)
+
+    errors = []
+    try:
+        container = _safe_find_by_id(session, container_id)
+        if not container and active_window_id != "wnd[0]":
+            container = _safe_find_by_id(session, "wnd[0]/usr")
+        elements = []
+        if container:
+            _traverse_children(container, elements, max_depth=max_depth)
+            _normalize_element_infos(elements)
+            for item in _table_candidates_from_elements(elements):
+                add_candidate(item)
+        else:
+            errors.append({
+                "phase": "element_discovery",
+                "container_id": container_id,
+                "error": "container not found",
+            })
+    except Exception as exc:
+        errors.append({
+            "phase": "element_discovery",
+            "container_id": container_id,
+            "error": str(exc),
+        })
+
+    priority = {"GuiGridView": 0, "GuiCtrlGridView": 0, "GuiTableControl": 1, "GuiShell": 2}
+    candidates.sort(key=lambda item: (
+        priority.get(str(item.get("type") or ""), 3),
+        0 if str(item.get("candidate_source") or "").startswith("focus") else 1,
+        len(str(item.get("id") or "")),
+    ))
+
+    tables = []
+    for candidate in candidates:
+        table_id = candidate.get("id", "")
+        table = _read_table_candidate(session, table_id, max_rows=max_rows, include_rows=include_rows)
+        if not table:
+            errors.append({
+                "phase": "read_table",
+                "table_id": table_id,
+                "type": candidate.get("type", ""),
+                "source": candidate.get("candidate_source", ""),
+                "error": "not readable as GuiTableControl/GuiGridView",
+            })
+            continue
+        table["candidate_source"] = candidate.get("candidate_source", "")
+        table["source_element_type"] = candidate.get("type", "")
+        if not include_rows:
+            table["rows"] = []
+            table["columns_only"] = True
+        tables.append(table)
+        if len(tables) >= LEGACY_REPORT_MAX_TABLES:
+            break
+
+    return {
+        "backend": "legacy_table_inspector",
+        "active_window": active_window_id,
+        "container_id": container_id,
+        "focused_element": focused_info or _get_focus_element(session),
+        "candidate_count": len(candidates),
+        "candidates": candidates[:25],
+        "tables": tables,
+        "errors": errors[:25],
+    }
+
+
 def scan_sap_screen(session):
     """
     掃描當前 SAP 畫面，將 UI 元件轉換為結構化 JSON。
@@ -839,6 +1275,11 @@ def scan_sap_screen(session):
         _normalize_element_infos(result["elements"])
         result["fields"] = _extract_form_fields(result["elements"], focused_id)
         result["tables"] = _extract_tables(result["elements"])
+        _merge_table_schema_context(
+            result["tables"],
+            _extract_table_control_schemas(session, result["elements"]),
+        )
+        result["tables"].extend(_extract_report_tables(session, result["elements"]))
         result["messages"] = _extract_window_messages(result["elements"])
         result["editors"] = _extract_editors(result["elements"])
     except Exception as e:
@@ -867,6 +1308,11 @@ def scan_sap_screen(session):
                 if focused_id.startswith(f"{window_id}/")
                 else None,
             }
+            _merge_table_schema_context(
+                popup_info["tables"],
+                _extract_table_control_schemas(session, popup_elements),
+            )
+            popup_info["tables"].extend(_extract_report_tables(session, popup_elements))
             result[f"popup_wnd{wnd_idx}"] = popup_info
             popup_infos.append(popup_info)
         except Exception:
@@ -1260,7 +1706,185 @@ def visualize_element(session, element_id: str, duration_seconds: float = 1.2, s
         }
 
 
-def guide_user_action(session, element_id: str, instruction: str) -> dict:
+def _compact_study_text(value, max_lines=5, max_chars=520):
+    """Keep Study Mode prompts short enough for a dialog."""
+    lines = [line.strip() for line in str(value or "").splitlines() if line.strip()]
+    if not lines:
+        return ""
+    text = "\n".join(lines[:max_lines])
+    if len(text) > max_chars:
+        text = text[:max_chars].rstrip() + "..."
+    if len(lines) > max_lines:
+        text += "\n..."
+    return text
+
+
+def _normalize_study_choices(choices):
+    if not choices:
+        return []
+    if isinstance(choices, str):
+        raw_items = re.split(r"[,，;；\n]", choices)
+    elif isinstance(choices, (list, tuple)):
+        raw_items = choices
+    else:
+        raw_items = []
+    result = []
+    for item in raw_items:
+        text = str(item or "").strip()
+        if text:
+            result.append(text)
+    return result[:6]
+
+
+STUDY_VALUE_TARGET_TYPES = {
+    "GuiTextField",
+    "GuiCTextField",
+    "GuiPasswordField",
+    "GuiOkCodeField",
+    "GuiComboBox",
+    "GuiCheckBox",
+    "GuiRadioButton",
+}
+
+STUDY_NON_ACTIONABLE_TARGET_TYPES = SKIP_TYPES | {
+    "GuiLabel",
+    "GuiStatusbar",
+    "GuiTitlebar",
+    "GuiToolbar",
+    "GuiMenubar",
+    "GuiMenu",
+}
+
+
+def _study_instruction_requests_value(instruction, expected_response_type):
+    if str(expected_response_type or "").lower() == "value":
+        return True
+    if str(expected_response_type or "").lower() == "choice":
+        return False
+    text = str(instruction or "")
+    value_keywords = (
+        "輸入",
+        "填入",
+        "填寫",
+        "填",
+        "代碼",
+        "欄位",
+        "本次要使用的值",
+        "enter",
+        "input",
+        "field",
+        "code",
+        "value",
+    )
+    return any(keyword.lower() in text.lower() for keyword in value_keywords)
+
+
+def _study_target_error(element_id, element_type, expected_response_type, reason):
+    return {
+        "exists": bool(element_type),
+        "actionable": False,
+        "element_id": element_id,
+        "element_type": element_type,
+        "expected_response_type": expected_response_type,
+        "error": reason,
+        "retry_advice": (
+            "Do not repeat guide_user_action with the same non-actionable element. "
+            "Find an exact visible input/control id from the current screen context first. "
+            "If the required field is not visible, guide the user to reveal it via table horizontal scroll, "
+            "item details, layout/personal settings, or SAP field search before asking for a value."
+        ),
+    }
+
+
+def inspect_study_target(session, element_id: str, expected_response_type: str = "confirm", instruction: str = "") -> dict:
+    """Validate that a Study Mode target is precise enough for the requested prompt."""
+    raw_id = str(element_id or "").strip()
+    wants_value = _study_instruction_requests_value(instruction, expected_response_type)
+
+    if not raw_id:
+        if wants_value:
+            return _study_target_error(
+                raw_id,
+                "",
+                expected_response_type,
+                "Value/input guidance requires an exact SAP input element id, but no element_id was provided.",
+            )
+        return {
+            "exists": False,
+            "actionable": True,
+            "element_id": "",
+            "element_type": "",
+            "expected_response_type": expected_response_type,
+            "current_value": "",
+        }
+
+    normalized_id = _normalize_element_id(session, raw_id)
+    element = _safe_find_by_id(session, normalized_id)
+    if not element:
+        return _study_target_error(
+            normalized_id,
+            "",
+            expected_response_type,
+            "The SAP element id could not be found on the current screen.",
+        )
+
+    element_type = _get_element_type_name(element)
+    is_root_user_area = bool(re.fullmatch(r"wnd\[\d+\]/usr/?", normalized_id))
+    is_non_actionable = is_root_user_area or element_type in STUDY_NON_ACTIONABLE_TARGET_TYPES
+
+    current_value = ""
+    for attr in ("Text", "Key", "Value"):
+        value = _safe_get_attr(element, attr, None)
+        if value not in (None, ""):
+            current_value = str(value)
+            break
+    if not current_value and element_type in ("GuiCheckBox", "GuiRadioButton"):
+        current_value = str(bool(_safe_get_attr(element, "Selected", False)))
+
+    if wants_value and is_non_actionable:
+        return _study_target_error(
+            normalized_id,
+            element_type,
+            expected_response_type,
+            "The target is a container/label/status element, not an input field. It cannot be used for value entry guidance.",
+        )
+
+    if wants_value and element_type not in STUDY_VALUE_TARGET_TYPES:
+        return _study_target_error(
+            normalized_id,
+            element_type,
+            expected_response_type,
+            f"The target element type {element_type} is not a writable value field.",
+        )
+
+    if is_non_actionable and str(expected_response_type or "").lower() not in ("choice", "confirm", "done"):
+        return _study_target_error(
+            normalized_id,
+            element_type,
+            expected_response_type,
+            "The target is not actionable for this type of Study prompt.",
+        )
+
+    return {
+        "exists": True,
+        "actionable": True,
+        "element_id": normalized_id,
+        "element_type": element_type,
+        "expected_response_type": expected_response_type,
+        "current_value": current_value,
+    }
+
+
+def guide_user_action(
+    session,
+    element_id: str,
+    instruction: str,
+    reason: str = "",
+    confidence: str = "",
+    source: str = "",
+    choices=None,
+    expected_response_type: str = "confirm",
+) -> dict:
     """
     引導使用者在 SAP GUI 上執行操作（Study Mode 專用）。
 
@@ -1271,36 +1895,68 @@ def guide_user_action(session, element_id: str, instruction: str) -> dict:
         session: SAP Session COM 物件
         element_id: 要高亮的 SAP 元件 ID
         instruction: 要顯示給使用者的操作指引文字
+        reason: 可選。為什麼要做這一步，應維持一行
+        confidence: 可選。high / medium / low / draft / prior
+        source: 可選。正式 skill / draft / knowledge / LLM prior 等來源
+        choices: 可選。候選流程或回覆選項
+        expected_response_type: confirm / choice / value / done
 
     Returns:
         dict: 操作結果
     """
-    # Step 1: 高亮元件
-    viz_result = visualize_element(
+    target = inspect_study_target(
         session,
         element_id=element_id,
-        duration_seconds=1.5,
-        set_focus=True,
+        expected_response_type=expected_response_type,
+        instruction=instruction,
     )
-    current_value = ""
-    try:
-        element = session.FindById(_normalize_element_id(session, element_id))
-        element_type = _get_element_type_name(element)
-        for attr in ("Text", "Key", "Value"):
-            value = _safe_get_attr(element, attr, None)
-            if value not in (None, ""):
-                current_value = str(value)
-                break
-        if not current_value and element_type in ("GuiCheckBox", "GuiRadioButton"):
-            current_value = str(bool(_safe_get_attr(element, "Selected", False)))
-    except Exception:
-        pass
+    if not target.get("actionable"):
+        print(f"\n\033[1;33m  Study target invalid:\033[0m {target.get('error')}")
+        return {
+            "success": False,
+            "action": "guide_user_action",
+            "element_id": target.get("element_id", element_id),
+            "element_type": target.get("element_type", ""),
+            "instruction": instruction,
+            "reason": reason,
+            "confidence": confidence,
+            "source": source,
+            "choices": _normalize_study_choices(choices),
+            "expected_response_type": expected_response_type,
+            "target_actionable": False,
+            "error": target.get("error", "Study target is not actionable."),
+            "retry_advice": target.get("retry_advice", ""),
+        }
+
+    target_id = target.get("element_id", "") or ""
+    # Step 1: 高亮元件
+    viz_result = {}
+    if target_id:
+        viz_result = visualize_element(
+            session,
+            element_id=target_id,
+            duration_seconds=1.5,
+            set_focus=True,
+        )
+    current_value = target.get("current_value", "")
 
     # Step 2: 印出指引
+    display_instruction = _compact_study_text(instruction, max_lines=5, max_chars=520)
+    display_reason = _compact_study_text(reason, max_lines=1, max_chars=180)
+    display_choices = _normalize_study_choices(choices)
     print(f"\n\033[1;33m  📌 操作指引:\033[0m")
-    print(f"\033[1;37m     {instruction}\033[0m")
-    if viz_result.get("element_type"):
-        print(f"\033[90m     元件: {element_id} ({viz_result.get('element_type', '')})\033[0m")
+    print(f"\033[1;37m     {display_instruction or instruction}\033[0m")
+    if display_reason:
+        print(f"\033[90m     理由: {display_reason}\033[0m")
+    if source or confidence:
+        source_text = source or "未標示來源"
+        confidence_text = confidence or "未標示信心"
+        print(f"\033[90m     來源/信心: {source_text} / {confidence_text}\033[0m")
+    if display_choices:
+        print(f"\033[90m     選項: {'；'.join(display_choices)}\033[0m")
+    if target_id:
+        element_type = viz_result.get("element_type") or target.get("element_type", "")
+        print(f"\033[90m     元件: {target_id} ({element_type})\033[0m")
     if current_value:
         print(f"\033[90m     目前值: {current_value}\033[0m")
     if not viz_result.get("success"):
@@ -1326,8 +1982,15 @@ def guide_user_action(session, element_id: str, instruction: str) -> dict:
     return {
         "success": True,
         "action": "guide_user_action",
-        "element_id": element_id,
+        "element_id": target_id,
+        "element_type": target.get("element_type", ""),
         "instruction": instruction,
+        "reason": reason,
+        "confidence": confidence,
+        "source": source,
+        "choices": display_choices,
+        "expected_response_type": expected_response_type,
+        "target_actionable": True,
         "user_response": user_response,
         "user_confirmed": not skipped,
         "skipped": skipped,
@@ -2823,11 +3486,34 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "element_id": {
                         "type": "string",
-                        "description": "要高亮的 SAP 元件 ID，例如 'wnd[0]/usr/ctxtVBAK-AUART'。",
+                        "description": "要高亮的精確可操作 SAP 元件 ID，例如 'wnd[0]/usr/ctxtVBAK-AUART'。輸入值時不可使用 wnd[0]/usr、GuiUserArea、container、label 或 status bar；找不到欄位時請先引導使用者揭露欄位。",
                     },
                     "instruction": {
                         "type": "string",
-                        "description": "要顯示給使用者的操作指引文字，例如 '請在此欄位填入銷售文件類型 ZOR'。",
+                        "description": "要顯示給使用者的單一步驟動作，最多 5 行；不要放完整候選流程分析。",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "可選。為什麼要做這一步，最多一行。",
+                    },
+                    "confidence": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low", "draft", "prior", "unknown"],
+                        "description": "可選。此步驟依據的信心水準。",
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "可選。此步驟來源，例如 formal skill、draft、knowledge、official search、LLM prior。",
+                    },
+                    "choices": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "可選。需要使用者選擇流程、T-Code 或下一步時提供的短選項。",
+                    },
+                    "expected_response_type": {
+                        "type": "string",
+                        "enum": ["confirm", "choice", "value", "done"],
+                        "description": "可選。期待使用者回覆類型。候選流程確認用 choice；一般完成確認用 confirm；請使用者輸入欄位值時才用 value，且 element_id 必須是真實可寫欄位。",
                     },
                 },
                 "required": ["element_id", "instruction"],

@@ -20,6 +20,7 @@ SAP GUI Copilot — CLI 入口 (Phase 4 — Agentic Coach)
 
 import os
 import json
+import re
 import sys
 import time
 from datetime import datetime
@@ -30,8 +31,10 @@ from sap_agent_tools import scan_sap_screen
 from llm_brain import SAPAgent
 from sap_monitor import SAPMonitor
 from sap_recorder import SAPRecorder
+from sap_knowledge_library import SAPKnowledgeLibrary
 from sap_skill_library import SAPSkillLibrary
 from mcp_client import get_default_sync_client
+from sap_table_inspector import format_table_inspection, inspect_current_tables
 
 
 def env_enabled(name, default="false"):
@@ -40,7 +43,8 @@ def env_enabled(name, default="false"):
 
 def parse_study_request(raw_text):
     text = str(raw_text or "").strip()
-    allow_draft = env_enabled("STUDY_ALLOW_DRAFT", "false")
+    require_draft_flag = env_enabled("STUDY_REQUIRE_DRAFT_FLAG", "false")
+    allow_draft = (not require_draft_flag) or env_enabled("STUDY_ALLOW_DRAFT", "true")
     save_draft = env_enabled("STUDY_SAVE_DRAFT_SKILL", "false")
 
     tokens = text.split()
@@ -84,7 +88,7 @@ def print_banner():
     print(f"""
 {Colors.CYAN}╔══════════════════════════════════════════════════╗
 ║                                                  ║
-║   🤖 SAP GUI Copilot  V0.10.0 (Stage 2)         ║
+║   🤖 SAP GUI Copilot  V0.12.1 (Stage 2)         ║
 ║   ─────────────────────────────────────────────   ║
 ║   用自然語言操作 SAP，告別繁瑣的 T-Code！        ║
 ║                                                  ║
@@ -97,6 +101,8 @@ def print_banner():
     /recordings    列出所有已錄製的 SOP
     /play [名稱]    顯示指定 SOP 的操作步驟
     /study [名稱]   AI 教練引導既有 SOP；--draft 才啟動探索草稿
+    /knowledge      匯入/搜尋/蒸餾 Study Mode knowledge
+    /skills         管理蒸餾草稿與正式 skill
     /ask           切換到 Ask Mode（問答模式）
     /solve         切換到 Solve Mode（問題排解模式）
     /auto          切換回 Auto Mode（自動代操）
@@ -308,6 +314,140 @@ def print_recording_steps(skill_library, name):
         print(f"{Colors.DIM}  使用 /recordings 查看所有可用項目{Colors.RESET}\n")
 
 
+def _parse_inline_options(text):
+    """Parse simple trailing options without forcing shell-like quoting rules."""
+    options = {}
+    remaining = str(text or "").strip()
+    for name in ("--type", "--tags"):
+        pattern = re.compile(rf"\s{name}\s+([^\s]+)", re.I)
+        match = pattern.search(f" {remaining}")
+        if match:
+            options[name.lstrip("-").replace("-", "_")] = match.group(1).strip().strip('"')
+            remaining = pattern.sub(" ", f" {remaining}", count=1).strip()
+    return remaining.strip().strip('"'), options
+
+
+def print_knowledge_usage():
+    print(f"{Colors.YELLOW}  用法:{Colors.RESET}")
+    print(f"{Colors.DIM}    /knowledge import <path-or-url> [--type official|company|community] [--tags tag1,tag2]{Colors.RESET}")
+    print(f"{Colors.DIM}    /knowledge search <query>{Colors.RESET}")
+    print(f"{Colors.DIM}    /knowledge distill <path-or-query>{Colors.RESET}")
+    print(f"{Colors.DIM}    /knowledge rebuild{Colors.RESET}")
+    print(f"{Colors.DIM}    /skills drafts{Colors.RESET}")
+    print(f"{Colors.DIM}    /skills promote <draft-relative-path-or-title>{Colors.RESET}\n")
+
+
+def print_knowledge_entries(entries, title="Knowledge Results"):
+    if not entries:
+        print(f"{Colors.YELLOW}  無結果{Colors.RESET}")
+        return
+    print(f"\n{Colors.CYAN}── {title} ──{Colors.RESET}")
+    for index, item in enumerate(entries, 1):
+        source = item.get("source_url") or item.get("source_path") or item.get("relative_path") or item.get("path") or ""
+        print(
+            f"  {Colors.WHITE}{index}. {item.get('document_title') or item.get('title')}{Colors.RESET} "
+            f"{Colors.DIM}[{item.get('module', '')} > {item.get('business_cycle', '')}] "
+            f"confidence={item.get('confidence', '')} score={item.get('score', '-')}{Colors.RESET}"
+        )
+        if item.get("tcode"):
+            print(f"     {Colors.DIM}T-Code: {', '.join(item.get('tcode', []))}{Colors.RESET}")
+        if source:
+            print(f"     {Colors.DIM}{source}{Colors.RESET}")
+        summary = item.get("summary", "")
+        if summary:
+            print(f"     {Colors.DIM}{summary[:180]}{Colors.RESET}")
+    print()
+
+
+def handle_knowledge_command(knowledge_library, arg):
+    parts = str(arg or "").strip().split(maxsplit=1)
+    if not parts:
+        print_knowledge_usage()
+        return
+    subcommand = parts[0].lower()
+    rest = parts[1].strip() if len(parts) > 1 else ""
+
+    try:
+        if subcommand == "import":
+            source, options = _parse_inline_options(rest)
+            if not source:
+                print_knowledge_usage()
+                return
+            entries = knowledge_library.import_source(
+                source,
+                source_type=options.get("type", ""),
+                tags=options.get("tags", ""),
+            )
+            print(f"{Colors.GREEN}  ✅ 已匯入 {len(entries)} 個階層節點{Colors.RESET}")
+            print_knowledge_entries(entries[:8], "Imported Knowledge")
+        elif subcommand == "search":
+            if not rest:
+                print_knowledge_usage()
+                return
+            print_knowledge_entries(
+                knowledge_library.search(rest, include_drafts=True),
+                "Knowledge Search",
+            )
+        elif subcommand == "distill":
+            if not rest:
+                print_knowledge_usage()
+                return
+            drafts = knowledge_library.distill(rest)
+            if not drafts:
+                print(f"{Colors.YELLOW}  沒有可蒸餾的 evidence{Colors.RESET}")
+                return
+            print(f"{Colors.GREEN}  ✅ 已產生 {len(drafts)} 份 draft skill{Colors.RESET}")
+            for item in drafts:
+                print(
+                    f"  {Colors.WHITE}{item.get('document_title')}{Colors.RESET} "
+                    f"{Colors.DIM}[{item.get('module')} > {item.get('business_cycle')}] "
+                    f"{item.get('relative_path')}{Colors.RESET}"
+                )
+            print()
+        elif subcommand == "rebuild":
+            index_path = knowledge_library.rebuild()
+            print(f"{Colors.GREEN}  ✅ Knowledge index 已重建: {index_path}{Colors.RESET}\n")
+        else:
+            print_knowledge_usage()
+    except Exception as exc:
+        print(f"{Colors.RED}  Knowledge 指令失敗: {exc}{Colors.RESET}\n")
+
+
+def handle_skills_command(skill_library, knowledge_library, arg):
+    parts = str(arg or "").strip().split(maxsplit=1)
+    if not parts:
+        print_knowledge_usage()
+        return
+    subcommand = parts[0].lower()
+    rest = parts[1].strip() if len(parts) > 1 else ""
+
+    try:
+        if subcommand == "drafts":
+            drafts = knowledge_library.list_drafts()
+            if not drafts:
+                print(f"{Colors.YELLOW}  目前沒有 draft skill{Colors.RESET}\n")
+                return
+            print(f"\n{Colors.CYAN}── Draft Skills ──{Colors.RESET}")
+            for index, draft in enumerate(drafts, 1):
+                print(
+                    f"  {Colors.WHITE}{index}. {draft.get('title')}{Colors.RESET} "
+                    f"{Colors.DIM}[{draft.get('module')} > {draft.get('business_cycle')}]{Colors.RESET}"
+                )
+                print(f"     {Colors.DIM}{draft.get('relative_path')}{Colors.RESET}")
+            print()
+        elif subcommand == "promote":
+            if not rest:
+                print_knowledge_usage()
+                return
+            promoted_path = knowledge_library.promote_draft(rest)
+            skill_library.rebuild_index()
+            print(f"{Colors.GREEN}  ✅ Draft 已提升為正式 skill: {promoted_path}{Colors.RESET}\n")
+        else:
+            print_knowledge_usage()
+    except Exception as exc:
+        print(f"{Colors.RED}  Skills 指令失敗: {exc}{Colors.RESET}\n")
+
+
 def _screen_brief(screen_state):
     """Build a compact screen summary for learned Study Mode skills."""
     if not screen_state:
@@ -332,7 +472,7 @@ def _screen_brief(screen_state):
     return "\n".join(lines)
 
 
-def build_ad_hoc_study_context(goal, screen_state):
+def build_ad_hoc_study_context(goal, screen_state, evidence_pack=""):
     """Create a Study Mode context when no recorded skill exists yet."""
     return f"""# 即席 Study 任務: {goal}
 
@@ -345,11 +485,14 @@ def build_ad_hoc_study_context(goal, screen_state):
 ## 目前 SAP 畫面摘要
 {_screen_brief(screen_state)}
 
+## Evidence Pack
+{evidence_pack or "- 尚未建立 evidence pack。"}
+
 ## 教練要求
 - 先明確告知使用者：目前沒有錄製依據，以下內容只能作為探索草稿。
-- 只能依目前 SAP 畫面、狀態列、彈窗、可見欄位與使用者回覆判斷下一步；不要把 SAP 常識推測說成已確認事實。
-- 如果不確定 T-Code、欄位位置、資料意義或下一步，請先問使用者或建議改用 `/record` 錄製一次正式流程。
-- 如果需要 T-Code，可以提出候選交易代碼，但必須標示為「候選」並請使用者確認。
+- 依證據優先級判斷：正式 skill/recording > promoted skill > draft > knowledge 文件 > 官方搜尋 > 社群/一般搜尋 > LLM prior。
+- 候選流程必須標示 module、business_cycle、來源與信心；不要把未驗證推測說成已確認事實。
+- 如果不確定 T-Code、欄位位置、資料意義或下一步，請先問使用者確認第一個關鍵 T-Code / 流程方向，或建議改用 `/record` 錄製一次正式流程。
 - 每次只引導一個步驟，優先使用 `guide_user_action` 高亮欄位或按鈕。
 - 不要替使用者寫入資料；由使用者在 SAP GUI 操作後確認。
 - 若資訊不足，先提出最小必要問題或引導使用者確認目前畫面，不要硬猜。
@@ -432,6 +575,10 @@ def get_mode_indicator(agent_mode, recorder):
 
 def main():
     """主程式入口"""
+    if any(arg.lower() in {"--ui", "ui", "/ui"} for arg in sys.argv[1:]):
+        from ui_app import main as ui_main
+        return ui_main()
+
     print_banner()
 
     # ===== Step 1: GitHub Copilot 認證 =====
@@ -479,6 +626,7 @@ def main():
     agent = SAPAgent(auth)
     recorder = SAPRecorder()
     skill_library = SAPSkillLibrary()
+    knowledge_library = SAPKnowledgeLibrary()
 
     # 初始化 Monitor（但不啟動，等使用者開始錄製時才啟動）
     monitor = None  # 延遲建立，因為 session 可能隨時需要刷新
@@ -519,6 +667,25 @@ def main():
                     print_screen_scan(session)
                 except ConnectionError as e:
                     print(f"{Colors.RED}  SAP 連線已斷開: {e}{Colors.RESET}")
+
+            elif cmd == "/inspect" or cmd.startswith("/inspect "):
+                parts = user_input.split(maxsplit=1)
+                target = parts[1].strip().lower() if len(parts) > 1 else "table"
+                if target not in {"table", "tables"}:
+                    print(f"{Colors.YELLOW}  Usage: /inspect table{Colors.RESET}")
+                    continue
+                try:
+                    session = sap.get_session()
+                    report = inspect_current_tables(
+                        session=session,
+                        max_depth=10,
+                        max_rows=10,
+                        include_rows=False,
+                        use_focus=True,
+                    )
+                    print(f"\n{Colors.CYAN}{format_table_inspection(report)}{Colors.RESET}\n")
+                except ConnectionError as e:
+                    print(f"{Colors.RED}  SAP connection failed: {e}{Colors.RESET}")
 
             # --- /login ---
             elif cmd == "/login":
@@ -617,6 +784,23 @@ def main():
                 sop_name = parts[1].strip()
                 print_recording_steps(skill_library, sop_name)
 
+            # --- /knowledge ... ---
+            elif cmd == "/knowledge" or cmd.startswith("/knowledge "):
+                parts = user_input.split(maxsplit=1)
+                handle_knowledge_command(
+                    knowledge_library,
+                    parts[1].strip() if len(parts) > 1 else "",
+                )
+
+            # --- /skills ... ---
+            elif cmd == "/skills" or cmd.startswith("/skills "):
+                parts = user_input.split(maxsplit=1)
+                handle_skills_command(
+                    skill_library,
+                    knowledge_library,
+                    parts[1].strip() if len(parts) > 1 else "",
+                )
+
             # --- /study [名稱] ---
             elif cmd == "/study" or cmd.startswith("/study "):
                 if recorder.is_recording:
@@ -649,11 +833,12 @@ def main():
                     skill_data = {}
                     print(f"\n{Colors.YELLOW}  找不到 SOP / skill: '{sop_name}'{Colors.RESET}")
                     if not allow_draft_study:
-                        print(f"{Colors.YELLOW}  為避免 Study Mode 在沒有錄製依據時亂教，已停止啟動。{Colors.RESET}")
+                        print(f"{Colors.YELLOW}  目前設定 STUDY_REQUIRE_DRAFT_FLAG=true，未加 --draft 時不啟動探索教學。{Colors.RESET}")
                         print(f"{Colors.DIM}  建議做法:{Colors.RESET}")
                         print(f"{Colors.DIM}    1. 使用 /record [名稱] 錄製一次真實流程{Colors.RESET}")
                         print(f"{Colors.DIM}    2. 使用 /solve 描述目前卡關畫面，取得排錯建議{Colors.RESET}")
                         print(f"{Colors.DIM}    3. 若只是探索草稿，請明確使用 /study --draft [目標]{Colors.RESET}")
+                        print(f"{Colors.DIM}    4. 若要讓 /study [目標] 自動進入 evidence draft，設定 STUDY_REQUIRE_DRAFT_FLAG=false{Colors.RESET}")
                         print(f"{Colors.DIM}       若要保存探索草稿，使用 /study --save-draft [目標]{Colors.RESET}\n")
                         continue
                     print(f"{Colors.DIM}  已啟動探索草稿模式；AI 只能依目前畫面與使用者確認引導，不會視為正式 SOP。{Colors.RESET}")
@@ -671,10 +856,15 @@ def main():
 
                 # 取得 SOP 文字內容
                 if not skill_found:
-                    sop_text = build_ad_hoc_study_context(sop_name, initial_screen)
+                    evidence_pack = knowledge_library.build_evidence_pack(
+                        sop_name,
+                        initial_screen,
+                        skill_library=skill_library,
+                    )
+                    sop_text = build_ad_hoc_study_context(sop_name, initial_screen, evidence_pack)
                     study_request = (
                         f"目前沒有既有 SOP。請以「{sop_name}」為學習目標，"
-                        "根據目前 SAP 畫面與 SAP 常識，用互動式教練方式引導我完成操作。"
+                        "根據 evidence pack、目前 SAP 畫面與使用者確認，用互動式教練方式引導我完成操作。"
                     )
                 elif skill_data.get("format") == "markdown" and skill_data.get("sop_text"):
                     sop_text = skill_data["sop_text"]
@@ -720,8 +910,7 @@ def main():
                     import traceback
                     print(f"\n{Colors.RED}  ❌ Study Mode 錯誤: {e}{Colors.RESET}")
                     print(f"{Colors.DIM}{traceback.format_exc()}{Colors.RESET}\n")
-                finally:
-                    agent.set_mode("auto")
+                print(f"{Colors.CYAN}  📘 Study Mode 仍保持啟用；輸入 /auto、/ask 或 /solve 可切換模式。{Colors.RESET}\n")
 
             # --- /ask ---
             elif cmd == "/ask":
@@ -748,7 +937,7 @@ def main():
             # --- 未知指令 ---
             elif user_input.startswith("/"):
                 print(f"{Colors.YELLOW}  未知指令: {user_input}{Colors.RESET}")
-                print(f"{Colors.DIM}  可用指令: /scan, /record, /stop, /recordings, /play, /study, /ask, /solve, /auto, /mcp, /login, /reset, /quit{Colors.RESET}")
+                print(f"{Colors.DIM}  可用指令: /scan, /record, /stop, /recordings, /play, /study, /knowledge, /skills, /ask, /solve, /auto, /mcp, /login, /reset, /quit{Colors.RESET}")
 
             # ===== 自然語言指令 → AI Agent =====
             else:

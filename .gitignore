@@ -1,6 +1,7 @@
 .venv/*
 .env
+__pycache__/
+*.pyc
 diary.txt
-plan.md
-plan_stage2.md
+todo.txt
 external/mcp-sap-gui/

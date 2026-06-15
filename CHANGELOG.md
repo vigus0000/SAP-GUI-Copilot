@@ -6,6 +6,53 @@
 
 ---
 
+## [0.12.1] - 2026-06-16
+
+#### Added
+- 新增 `sap_inspect_tables` MCP 診斷工具：結合目前焦點元素、父層 ID 探測、深層 element discovery 與 schema-first 讀取，用於 ME51N 項目概觀這類一般 scan 抓不到的表格/ALV。
+- 新增 `/inspect table` CLI/UI 診斷入口：優先呼叫 MCP `sap_inspect_tables`，若不可用則走 legacy COM fallback，輸出 focused element、候選 table id、可讀欄位與錯誤原因。
+- 新增 `MCP_TABLE_CONTEXT_INSPECT_ON_EMPTY`、`MCP_TABLE_CONTEXT_INSPECT_INCLUDE_ROWS` 設定；當一般 MCP table discovery 為空時，Ask / Solve / Study / Auto 會自動嘗試深層表格檢查。
+- 新增 MCP-first 表格/報表讀取 context：畫面有 `GuiGridView`、`GuiTableControl` 或 ALV/`GuiShell` 時，Agent 會優先用 `sap_read_table` 讀取前幾列並輸出 `mcp_table_report_context`，讓 Ask / Solve / Study / Auto 能直接看到報表資料。
+- 新增表格 schema-first 讀取：`MCP_TABLE_CONTEXT_SCHEMA_FIRST=true` 時會先呼叫 `sap_read_table(columns_only=true)` 取得欄位 metadata，再讀 rows，支援「項目概觀有哪些欄位」這類欄位查詢。
+- 新增 broad table discovery：filtered MCP discovery 找不到表格候選時，會用 `MCP_TABLE_CONTEXT_BROAD_DISCOVERY_DEPTH` 做一次較深廣域掃描，從 element id / name / text 補抓 table/grid/shell 候選。
+- 新增 shell/report 內容補充讀取：非表格 `GuiShell` 可由 `sap_read_shell_content` 讀取文字、URL 或 HTML preview，作為報表或 HTMLViewer 類畫面的 fallback。
+- 新增表格讀取上限設定：`MCP_READ_TABLES_IN_CONTEXT`、`MCP_READ_SHELLS_IN_CONTEXT`、`MCP_TABLE_CONTEXT_MAX_TABLES`、`MCP_TABLE_CONTEXT_MAX_ROWS`、`MCP_TABLE_CONTEXT_MAX_COLUMNS`、`MCP_TABLE_CONTEXT_DISCOVERY_DEPTH`、`MCP_SHELL_CONTEXT_MAX_CHARS`。
+
+#### Changed
+- legacy GUI fallback scanner 現在也會嘗試讀取 ALV-like `GuiShell` / `GuiGridView` 前 25 列、12 欄，避免 MCP 不可用時完全看不到報表內容。
+- legacy GUI fallback scanner 現在會保留 `GuiTableControl.Columns` schema，即使目前沒有 rows，也能把項目概觀欄位名稱放進 screen summary。
+- Ask / Solve / Study 的 MCP 畫面讀取改為 evidence scan：使用較深的 `MCP_EVIDENCE_SCREEN_MAX_DEPTH` 並包含 `GuiLabel`，避免 ME51N、ME5A、ALV 或 Splitter Layout 只讀到交易碼/標題。
+- `MCP_TABLE_CONTEXT_DISCOVERY_DEPTH` 預設由 4 提高到 6，但仍使用表格/shell type filter，改善 ME51N 項目概觀等深層表格偵測。
+
+#### Fixed
+- 修正表格欄位清單被 `MCP_TABLE_CONTEXT_MAX_COLUMNS=12` 截斷的問題；現在 `columns` / `column_info` 由 `MCP_TABLE_CONTEXT_MAX_SCHEMA_COLUMNS` 獨立控制，資料列 `rows[].cells` 才維持低欄數上限。
+- `main.py --ui` 現在會直接啟動 Tkinter UI；先前只有 `start.py --ui` 會解析 UI 參數，導致 `uv run main.py --ui` 仍進入 CLI。
+- Ask Mode 詢問表格欄位時，若 `rows` 空但 `columns` / `column_info` 已讀到，現在會直接依欄位 schema 回答，不再誤判為「表格內容讀不到」。
+- 修正 Ask Mode 在 MCP 輕量掃描沒有讀到欄位/表格時仍直接回覆通用教材的問題；現在會附上 `legacy_screen_summary_fallback`，模型必須先使用 fallback 的 `fields`、`tables`、`status_bar`。
+- Study Mode 現在會拒絕把 `wnd[0]/usr`、container、label 或 status bar 當成輸入欄位；若必填欄位存在但目前畫面沒有讀到精確欄位 ID，會回報 `target_actionable=false` 並要求改為揭露欄位，而不是彈窗要求使用者填不存在的欄位。
+- 修正 Study Mode 執行完一輪後 CLI / UI 會在 `finally` 自動切回 Auto Mode 的惡性狀態機 bug；現在 Study 會保持啟用，只有使用者明確 `/auto`、`/ask`、`/solve` 或按模式按鈕時才切換。
+
+## [0.11.0] - 2026-06-12
+
+#### Added
+- **Study Mode 階層式 Knowledge / Skill 蒸餾**
+  - 新增 `sap_knowledge_library.py`，可將本機文件或 URL 匯入 `knowledge/`，並以 `module -> business_cycle -> document` 建立 evidence index。
+  - 新增 `/knowledge import`、`/knowledge search`、`/knowledge distill`、`/knowledge rebuild` 指令。
+  - 新增 `/skills drafts` 與 `/skills promote`，蒸餾結果預設只保存到 `skills/_drafts/<module>/<business_cycle>/`，必須 promote 才會成為正式 Study skill。
+  - Knowledge index 保存 `module`、`business_cycle`、`document_title`、`source_path/url`、`source_type`、`tags`、`tcode`、`confidence`、`content_hash`。
+  - `/study --draft` 找不到正式 skill 時會建立 evidence pack，引用目前 SAP 畫面、正式 skill、draft、knowledge 與可選網搜結果，再要求使用者確認第一個關鍵流程方向。
+
+#### Changed
+- Study prompt 現在明確要求 no-recording Study 依 evidence priority 回答，不保存 raw COT，只輸出 structured rationale、來源、信心與未知項目。
+- Study Mode 無錄製教學改成「候選流程確認 -> 單一步驟引導」：當 evidence 只有 LLM prior 或信心不足時，第一個 dialog 只詢問使用者確認 T-Code / 流程方向，不再把完整候選分析、未知項目與欄位輸入混在同一個提示窗。
+- `guide_user_action` 新增 `reason`、`confidence`、`source`、`choices`、`expected_response_type` 欄位，UI 會把教學指令壓縮成短提示，並把來源/信心/選項拆開顯示，降低 Study Step 視窗資訊過載。
+- `.env.example` 新增 `STUDY_WEB_SEARCH_ENABLED`、搜尋上限、timeout 與 knowledge match 上限；即時網搜預設關閉，需要時手動啟用。
+
+#### Fixed
+- `/study [未知目標]` 不再因舊設定 `STUDY_ALLOW_DRAFT=false` 直接停止；v0.11 預設會進入 evidence-driven draft。若要恢復舊版必須明確加 `STUDY_REQUIRE_DRAFT_FLAG=true`。
+- 驗證過程確認 mock 測試嚴重卡住的原因是 `tempfile.mkdtemp(dir='C:\\tmp')` 在目前 Windows 環境會停在暫存目錄建立；改以工作區短生命測試目錄驗證 knowledge import / distill / promote 流程。
+- Evidence pack 新增 `Evidence Summary`，提供 `evidence_level`、`best_confidence`、`should_confirm_flow` 與 `recommended_source`，讓 Study prompt 能依據實際證據強度決定是否先做流程確認。
+
 ## [0.10.0] - 2026-06-12
 
 #### Added

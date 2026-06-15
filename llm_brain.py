@@ -85,6 +85,28 @@ MCP_SAP_FAST_MODE = env_enabled("MCP_SAP_FAST_MODE", "true")
 MCP_SAP_TOOL_PROFILE = os.getenv("MCP_SAP_TOOL_PROFILE", "core").strip().lower()
 MCP_FAST_SCREEN_MAX_DEPTH = int(os.getenv("MCP_FAST_SCREEN_MAX_DEPTH", "2"))
 MCP_FAST_SCREEN_CHANGEABLE_ONLY = env_enabled("MCP_FAST_SCREEN_CHANGEABLE_ONLY", "false")
+MCP_EVIDENCE_SCREEN_MAX_DEPTH = int(os.getenv("MCP_EVIDENCE_SCREEN_MAX_DEPTH", "5"))
+MCP_EVIDENCE_SCREEN_TYPE_FILTER = os.getenv(
+    "MCP_EVIDENCE_SCREEN_TYPE_FILTER",
+    ",".join([
+        "GuiTextField",
+        "GuiCTextField",
+        "GuiPasswordField",
+        "GuiComboBox",
+        "GuiCheckBox",
+        "GuiRadioButton",
+        "GuiButton",
+        "GuiTab",
+        "GuiTableControl",
+        "GuiGridView",
+        "GuiShell",
+        "GuiLabel",
+        "GuiStatusbar",
+        "GuiOkCodeField",
+    ]),
+)
+MCP_EVIDENCE_LEGACY_FALLBACK_ON_EMPTY = env_enabled("MCP_EVIDENCE_LEGACY_FALLBACK_ON_EMPTY", "true")
+MCP_EVIDENCE_MIN_ELEMENT_COUNT = int(os.getenv("MCP_EVIDENCE_MIN_ELEMENT_COUNT", "1"))
 MCP_SCREEN_CACHE_ENABLED = env_enabled("MCP_SCREEN_CACHE_ENABLED", "true")
 MCP_SCREEN_CACHE_TTL_SECONDS = float(os.getenv("MCP_SCREEN_CACHE_TTL_SECONDS", "30"))
 MCP_SCREEN_CACHE_MAX_WRITES = int(os.getenv("MCP_SCREEN_CACHE_MAX_WRITES", "20"))
@@ -92,6 +114,25 @@ MCP_EXPOSE_DISCOVERY_TO_LLM = env_enabled("MCP_EXPOSE_DISCOVERY_TO_LLM", "false"
 MCP_POPUP_USE_POPUP_TOOL_ONLY = env_enabled("MCP_POPUP_USE_POPUP_TOOL_ONLY", "true")
 MCP_ATTACH_ELEMENTS_AFTER_NAV = env_enabled("MCP_ATTACH_ELEMENTS_AFTER_NAV", "true")
 MCP_ATTACH_ELEMENTS_ON_FIELD_FAILURE = env_enabled("MCP_ATTACH_ELEMENTS_ON_FIELD_FAILURE", "true")
+MCP_READ_TABLES_IN_CONTEXT = env_enabled("MCP_READ_TABLES_IN_CONTEXT", "true")
+MCP_READ_SHELLS_IN_CONTEXT = env_enabled("MCP_READ_SHELLS_IN_CONTEXT", "true")
+MCP_TABLE_CONTEXT_MAX_TABLES = int(os.getenv("MCP_TABLE_CONTEXT_MAX_TABLES", "3"))
+MCP_TABLE_CONTEXT_MAX_ROWS = int(os.getenv("MCP_TABLE_CONTEXT_MAX_ROWS", "25"))
+MCP_TABLE_CONTEXT_MAX_COLUMNS = int(os.getenv("MCP_TABLE_CONTEXT_MAX_COLUMNS", "12"))
+MCP_TABLE_CONTEXT_MAX_SCHEMA_COLUMNS = int(os.getenv("MCP_TABLE_CONTEXT_MAX_SCHEMA_COLUMNS", "80"))
+MCP_TABLE_CONTEXT_MAX_CELL_CHARS = int(os.getenv("MCP_TABLE_CONTEXT_MAX_CELL_CHARS", "160"))
+MCP_TABLE_CONTEXT_DISCOVERY_DEPTH = int(os.getenv("MCP_TABLE_CONTEXT_DISCOVERY_DEPTH", "6"))
+MCP_TABLE_CONTEXT_SCHEMA_FIRST = env_enabled("MCP_TABLE_CONTEXT_SCHEMA_FIRST", "true")
+MCP_TABLE_CONTEXT_BROAD_DISCOVERY_ON_EMPTY = env_enabled("MCP_TABLE_CONTEXT_BROAD_DISCOVERY_ON_EMPTY", "true")
+MCP_TABLE_CONTEXT_BROAD_DISCOVERY_DEPTH = int(os.getenv("MCP_TABLE_CONTEXT_BROAD_DISCOVERY_DEPTH", "10"))
+MCP_TABLE_CONTEXT_INSPECT_ON_EMPTY = env_enabled("MCP_TABLE_CONTEXT_INSPECT_ON_EMPTY", "true")
+MCP_TABLE_CONTEXT_INSPECT_INCLUDE_ROWS = env_enabled("MCP_TABLE_CONTEXT_INSPECT_INCLUDE_ROWS", "false")
+MCP_TABLE_CONTEXT_MAX_CANDIDATES = int(os.getenv("MCP_TABLE_CONTEXT_MAX_CANDIDATES", "12"))
+MCP_SHELL_CONTEXT_MAX_CHARS = int(os.getenv("MCP_SHELL_CONTEXT_MAX_CHARS", "4000"))
+MCP_TABLE_CONTEXT_TYPE_FILTER = os.getenv(
+    "MCP_TABLE_CONTEXT_TYPE_FILTER",
+    "GuiGridView,GuiTableControl,GuiShell",
+)
 MCP_FAST_SCREEN_TYPE_FILTER = os.getenv(
     "MCP_FAST_SCREEN_TYPE_FILTER",
     ",".join([
@@ -134,6 +175,7 @@ MCP_CORE_TOOL_NAMES = set(env_list(
         "sap_read_textedit",
         "sap_set_textedit",
         "sap_set_focus",
+        "sap_inspect_tables",
         "sap_read_table",
         "sap_select_table_row",
         "sap_select_popup_table_row_and_confirm",
@@ -219,6 +261,7 @@ MCP_DISCOVERY_TOOL_NAMES = {
     "sap_get_screen_info",
     "sap_get_light_snapshot",
     "sap_get_screen_elements",
+    "sap_inspect_tables",
     "sap_get_screen",
     "sap_scan_screen",
     "sap_get_current_screen",
@@ -257,6 +300,9 @@ SYSTEM_PROMPT_AUTO = """你是一個專業的 SAP GUI 操作助手。你可以�
 - 如果欄位寫入回傳 Could not set field 或 failed>0，代表使用了錯誤/過期的 ID；先根據 screen_after.field_write_recovery 或 screen_after.screen_elements 找正確欄位重試，不要立刻改成手動教學
 - 如果 fields 的 type 是 GuiCheckBox 或 GuiRadioButton，讀取狀態使用 read_checkbox，設定狀態使用 set_checkbox；不要用 set_text 寫入 True/False，也不要在狀態未知時盲目 click
 - checkbox/radio 的 fields[].value 會是 "True" / "False"，selected 也會標示布林狀態；操作前先確認目前狀態，避免重複切換
+- 如果畫面 context 有 `mcp_table_report_context`，代表系統已用 MCP 讀到 ALV/Grid/TableControl 報表資料；回答或操作前優先使用其中的 `tables[].rows`、`columns`、`column_info`、`total_rows`，不要要求使用者手動貼出表格。
+- 如果使用者問「有哪些欄位」，即使 `tables[].rows` 是空的，只要 `tables[].columns` 或 `column_info` 有資料，就必須直接列出欄位；不要因 rows 空就說表格讀不到。
+- 大型報表若 `total_rows > rows_returned`，只在使用者需要更多資料時才分頁呼叫 `sap_read_table(start_row=...)`；不要一次讀完整大表。
 - 如果 active_popup.tables 或 tables 顯示 GuiTableControl 列資料，且任務是勾選/選擇某一列（例如 MM03「選擇檢視」彈窗中的「基本資料 1」），優先使用 select_table_row(row_text=...)；不要只 click/highlight 文字 cell，因為 checkbox 可能藏在 table 選取欄內
 - 選完 table row 後通常還需要按彈窗的 ok/continue/Enter；先用 select_table_row，再用 handle_popup(action="ok") 或 send_vkey(0, window_id="wnd[1]")
 - 如果 scan 結果有 editors、role=editor、editor_capabilities、type=GuiAbapEditor 或 type=GuiShell 的 ABAP editor，代表程式碼編輯器；讀取程式碼必須使用 read_editor_text，寫入 ABAP 原始碼必須使用 set_editor_text，不要用 set_text
@@ -289,6 +335,9 @@ SYSTEM_PROMPT_ASK = """你是一個專業的 SAP GUI 問答助手。你**只回�
 - **你不能呼叫任何工具**，只能用文字回答
 - 根據當前畫面 JSON 分析「這格該填什麼」「為何報錯」等問題
 - 如果畫面 JSON 有 `editor_sources` 且 success=true，代表已讀到 SE38/ABAP editor 的程式碼；回答程式用途時必須根據 `editor_sources[].text` 分析，不要再要求使用者貼程式碼
+- 如果畫面 JSON 或 MCP context 有 `mcp_table_report_context`，代表已讀到目前 ALV/Grid/TableControl 報表或表格資料；回答表格、清單、報表內容時必須根據 `tables[].rows`、`columns` 與 `column_info`，不要要求使用者再貼表格。
+- 如果問題是詢問表格欄位、欄位標題或目前顯示哪些 columns，`tables[].columns` / `column_info` 本身就是答案；即使 rows 為空，也不要回答「表格內容讀不到」。
+- 如果 context 有 `legacy_screen_summary_fallback`，代表 MCP 輕量讀取不足但 legacy scanner 讀到了補充資料；必須優先使用 fallback 內的 `fields`、`tables`、`status_bar`，不要再宣稱「畫面元素無法讀到」。
 - 如果 `editor_sources` 讀取失敗，說明讀取失敗原因，並請使用者切到程式碼 editor 或貼出程式碼
 - 如果提供了 SOP 紀錄，參考其步驟來引導使用者
 - 使用繁體中文回覆
@@ -313,6 +362,8 @@ SYSTEM_PROMPT_SOLVE = """你是一個專業的 SAP GUI 問題排解助手。你�
 - 使用繁體中文，簡潔、具體、可操作。
 - 回答必須先給「讀到的錯誤/訊息」，再給「目前判斷」，最後給「建議處理」。
 - 如果 `solve_diagnostics.messages` 或 table rows 有多筆錯誤，必須先逐條列出或分組歸納，再判斷優先修正順序。
+- 如果 context 有 `mcp_table_report_context`，必須優先使用其中的表格/報表列與欄位 schema 作為證據；若只讀到欄位 schema 而沒有 rows，可以回答欄位問題，但需說明目前未讀到列資料。
+- 如果 context 有 `legacy_screen_summary_fallback`，代表 MCP 輕量讀取不足但 legacy scanner 讀到了補充資料；必須先使用 fallback 的 `fields`、`tables`、`messages`，不要直接回答畫面讀不到。
 - 不要在沒有實際錯誤訊息佐證時提出具體程式碼修法；可以說「目前畫面未提供足夠錯誤文字，請先打開/展開錯誤清單」。
 - 若使用者提到 ABAP Activate / Syntax Check 失敗，必須先尋找語法錯誤清單、狀態列錯誤、彈窗訊息或 table row。只有在讀到實際錯誤文字後，才給出對應 ABAP 修法。
 - 若有 active_popup，優先說明彈窗標題、錯誤/提示文字、必填欄位、可按的按鈕，並建議使用者如何填寫或關閉。
@@ -338,14 +389,31 @@ SYSTEM_PROMPT_STUDY = """你是一個 SAP GUI 操作教練。你的任務是根�
 
 ## 工作流程
 1. 閱讀提供的 SOP 指南、即席教學目標和當前 SAP 畫面狀態
-2. 根據 SOP 的下一步，或在沒有 SOP 時根據 SAP 常識與目前畫面推斷下一步，找到畫面上對應的元件 ID
-3. 使用 `guide_user_action(element_id, instruction)` 引導使用者
-4. 使用者確認完成後，工具結果會包含 `user_response`；如果它不是空字串，代表使用者在教學中輸入了明確回答，你必須依該回答決定下一步，不能重複詢問同一個問題
-5. 如果畫面狀態與 SOP 預期不同，分析原因並調整引導
+2. 若 extra context 包含 `Study Evidence Pack`，先依 evidence pack 的證據優先級判斷，不要直接用 SAP 常識補齊
+3. 根據 SOP 的下一步，或在沒有 SOP 時根據 evidence pack、目前畫面與使用者確認推斷下一步，找到畫面上對應的元件 ID
+4. 使用 `guide_user_action(element_id, instruction, reason, confidence, source, choices, expected_response_type)` 引導使用者
+5. 使用者確認完成後，工具結果會包含 `user_response`；如果它不是空字串，代表使用者在教學中輸入了明確回答，你必須依該回答決定下一步，不能重複詢問同一個問題
+6. 如果畫面狀態與 SOP 預期不同，分析原因並調整引導
+
+## Evidence Pack 使用規則
+- 證據優先級固定為：正式 skill / recording > promoted 公司 skill > 同 module / business cycle draft > 匯入 knowledge 文件 > 即時官方搜尋 > 社群或一般搜尋 > LLM prior。
+- 每個候選流程都要標示 module、business_cycle、來源與信心；信心低或來源不足時，先請使用者確認第一個關鍵 T-Code / 流程方向。
+- 不要輸出 raw chain-of-thought；只輸出 structured rationale：依據來源、信心、未知項目、下一個安全引導步驟。
+- web search 或 community evidence 只能作為低信心參考，不能直接變成正式操作步驟。
+- 如果 Evidence Summary 顯示 `evidence_level: llm_prior_only` 或 `should_confirm_flow: true`，第一個 `guide_user_action` 必須是候選流程確認，不得要求使用者同時輸入 T-Code 或業務欄位。
+- 低信心候選確認可使用 `source="LLM prior"`、`confidence="low"`、`expected_response_type="choice"`、`choices=[...]`。使用者直接按 OK 視為接受第一個建議；輸入其他 T-Code 或流程名稱時，後續必須改用使用者指定方向。
+
+## 元件定位規則
+- `guide_user_action` 的 `element_id` 必須是目前畫面中精確、可見、可操作的元件 ID。
+- 不要把 `wnd[0]/usr`、`wnd[1]/usr`、`GuiUserArea`、container、label 或 status bar 當成要輸入資料的欄位。
+- 要求使用者輸入值時，`expected_response_type` 必須是 `value`，且目標必須是實際輸入欄位、combo、checkbox 或 radio。
+- 如果狀態列提示必填欄位（例如「輸入 採購群組」），但目前 screen context 沒有該欄位 ID，請先說明「目前未在可見畫面讀到此欄位」，並引導使用者揭露欄位（表格水平捲動、項目明細、版面/個人設定、SAP 欄位搜尋），不要直接要求填入不存在的欄位。
+- 如果工具回傳 `target_actionable=false`，下一輪不得重複同一個 element_id；必須改找精確欄位，或改成引導使用者揭露欄位。
 
 ## 沒有既有 SOP 時
 - 如果 extra context 表明「目前沒有同名 SOP / skill」或「即席 Study 任務」，你仍然要教學，不要要求使用者先錄製 SOP
-- 先依使用者目標判斷最可能的 SAP 流程；例如「查詢物料」通常可先考慮 MM03 或系統中的物料查詢交易，但要依目前畫面與狀態列調整
+- 先讀 `Study Evidence Pack`；若有正式 skill、draft 或 knowledge 命中，必須引用其 module、business_cycle、來源與信心來提出候選流程
+- 如果 evidence pack 沒有足夠證據，可以提出低信心候選，但第一步只能要求使用者確認候選流程，不要直接教完整流程
 - 如果需要進入 T-Code，請用 `guide_user_action` 高亮 T-Code 欄位，指示使用者輸入交易代碼並按 Enter
 - 如果目標太模糊，先問一個最小必要問題；若已有合理預設流程，先提出建議並引導第一步
 - 完成教學時，回覆一段簡短、可重用的 SOP 摘要，方便系統保存成 skill 草稿
@@ -360,7 +428,8 @@ SYSTEM_PROMPT_STUDY = """你是一個 SAP GUI 操作教練。你的任務是根�
 
 ## 引導風格
 - 每次只引導一個步驟，等使用者確認完成後再繼續
-- instruction 要清楚說明：要操作什麼、填入什麼值、為什麼這樣做
+- `instruction` 只寫本步要做什麼，最多 5 行；不要把候選流程、完整分析、未知項目清單塞進 `instruction`
+- `reason` 只寫一行為什麼；`source` 與 `confidence` 放來源與信心；需要使用者選擇時用 `choices`
 - 如果 SOP 中有具體值（如 T-Code、欄位值），在 instruction 中把它稱為「參考值」；目前畫面已有值時，優先提示確認目前值
 - 如果你用 `guide_user_action` 詢問選項，下一輪必須讀取工具結果的 `user_response` 並處理該選項；例如使用者回覆 `4` 且你的選項 4 是結束教學，就要停止呼叫工具並回覆 SOP 摘要
 - 不要連續對同一元件提出語意相同的選項問題；若使用者已回答，必須收斂或換下一步
@@ -698,7 +767,7 @@ class SAPAgent:
         self._mcp_last_screen_fingerprint = fingerprint
         return fingerprint
 
-    def _mcp_cached_elements_valid(self, fingerprint, container_id):
+    def _mcp_cached_elements_valid(self, fingerprint, container_id, min_depth=0, type_filter=""):
         if not MCP_SCREEN_CACHE_ENABLED:
             return False
         cache = self._mcp_screen_cache
@@ -708,10 +777,14 @@ class SAPAgent:
             return False
         if cache.get("container_id") != container_id:
             return False
+        if min_depth and int(cache.get("max_depth") or 0) < int(min_depth):
+            return False
+        if type_filter and cache.get("type_filter") != type_filter:
+            return False
         age = time.time() - float(cache.get("elements_at") or 0)
         return age <= MCP_SCREEN_CACHE_TTL_SECONDS
 
-    def _remember_mcp_elements(self, fingerprint, container_id, elements_text):
+    def _remember_mcp_elements(self, fingerprint, container_id, elements_text, max_depth=0, type_filter=""):
         if not MCP_SCREEN_CACHE_ENABLED or not fingerprint or not elements_text:
             return
         self._mcp_screen_cache = {
@@ -719,6 +792,8 @@ class SAPAgent:
             "container_id": container_id,
             "elements_text": str(elements_text),
             "elements_at": time.time(),
+            "max_depth": int(max_depth or 0),
+            "type_filter": type_filter,
         }
 
     def _mcp_filtered_elements_for_screen(self, screen_info, reason, force=False):
@@ -734,7 +809,12 @@ class SAPAgent:
         container_id = f"{active_window}/usr" if active_window.startswith("wnd[") else "wnd[0]/usr"
         fingerprint = self._mcp_screen_fingerprint(screen_info)
 
-        if not force and self._mcp_cached_elements_valid(fingerprint, container_id):
+        if not force and self._mcp_cached_elements_valid(
+            fingerprint,
+            container_id,
+            min_depth=MCP_FAST_SCREEN_MAX_DEPTH,
+            type_filter=MCP_FAST_SCREEN_TYPE_FILTER,
+        ):
             return {
                 "backend": "mcp_internal_elements",
                 "tool": elements_tool,
@@ -758,7 +838,13 @@ class SAPAgent:
                 "type_filter": MCP_FAST_SCREEN_TYPE_FILTER,
                 "changeable_only": MCP_FAST_SCREEN_CHANGEABLE_ONLY,
             })
-            self._remember_mcp_elements(fingerprint, container_id, raw_elements)
+            self._remember_mcp_elements(
+                fingerprint,
+                container_id,
+                raw_elements,
+                max_depth=depth,
+                type_filter=MCP_FAST_SCREEN_TYPE_FILTER,
+            )
             return {
                 "backend": "mcp_internal_elements",
                 "tool": elements_tool,
@@ -777,6 +863,509 @@ class SAPAgent:
                 "reason": reason,
                 "error": str(e),
             }
+
+    def _mcp_elements_from_text(self, raw_text):
+        parsed = self._parse_mcp_json_text(raw_text)
+        if isinstance(parsed, list):
+            return [item for item in parsed if isinstance(item, dict)]
+        if isinstance(parsed, dict):
+            for key in ("elements", "data", "items", "result"):
+                value = parsed.get(key)
+                if isinstance(value, list):
+                    return [item for item in value if isinstance(item, dict)]
+            content = parsed.get("content")
+            if isinstance(content, list):
+                elements = []
+                for item in content:
+                    if isinstance(item, dict):
+                        text = item.get("text") or item.get("content")
+                        if isinstance(text, str):
+                            elements.extend(self._mcp_elements_from_text(text))
+                return elements
+        return []
+
+    def _mcp_context_sections(self, text):
+        sections = []
+        current_title = ""
+        current_lines = []
+        for line in str(text or "").splitlines():
+            if line.startswith("### "):
+                if current_title:
+                    sections.append((current_title, "\n".join(current_lines).strip()))
+                current_title = line[4:].strip()
+                current_lines = []
+            else:
+                current_lines.append(line)
+        if current_title:
+            sections.append((current_title, "\n".join(current_lines).strip()))
+        return sections
+
+    def _mcp_text_has_useful_screen_evidence(self, text):
+        element_count = 0
+        table_rows = 0
+        table_columns = 0
+        shell_content = False
+
+        for title, body in self._mcp_context_sections(text):
+            if "screen_elements" in title or "fast filtered" in title:
+                element_count += len(self._mcp_elements_from_text(body))
+                continue
+            if title == "mcp_table_report_context":
+                parsed = self._parse_mcp_json_text(body)
+                if not isinstance(parsed, dict):
+                    continue
+                for table in parsed.get("tables") or []:
+                    if isinstance(table, dict):
+                        table_rows += len(table.get("rows") or [])
+                        table_columns += len(table.get("columns") or [])
+                for shell in parsed.get("shells") or []:
+                    if not isinstance(shell, dict):
+                        continue
+                    if shell.get("text") or shell.get("html_preview") or shell.get("url"):
+                        shell_content = True
+
+        return (
+            element_count >= MCP_EVIDENCE_MIN_ELEMENT_COUNT
+            or table_rows > 0
+            or table_columns > 0
+            or shell_content
+        )
+
+    def _mcp_table_candidates_from_elements(self, elements):
+        candidates = []
+        seen = set()
+        table_types = {"GuiGridView", "GuiTableControl", "GuiShell", "GuiCtrlGridView"}
+        table_id_patterns = (
+            "/tbl",
+            "tbl",
+            "grid",
+            "alv",
+            "shellcont/shell",
+            "cntl",
+        )
+        table_text_patterns = (
+            "table",
+            "grid",
+            "item overview",
+            "項目概觀",
+            "項目總覽",
+            "項目明細",
+        )
+
+        for element in elements or []:
+            element_id = str(
+                element.get("id")
+                or element.get("element_id")
+                or element.get("Id")
+                or ""
+            ).strip()
+            element_type = str(element.get("type") or element.get("Type") or "").strip()
+            element_name = str(element.get("name") or element.get("Name") or "").strip()
+            element_text = str(element.get("text") or element.get("Text") or "").strip()
+            lowered_blob = " ".join([element_id, element_name, element_text]).lower()
+            looks_like_table = (
+                element_type in table_types
+                or any(pattern in lowered_blob for pattern in table_id_patterns)
+                or any(pattern in lowered_blob for pattern in table_text_patterns)
+            )
+            if not element_id or element_id in seen or not looks_like_table:
+                continue
+
+            # GuiShell covers ALV grids, trees, HTML viewers and editors. Keep it
+            # as a candidate, but table reads will be best-effort and may fall
+            # back to shell content.
+            seen.add(element_id)
+            candidates.append({
+                "id": element_id,
+                "type": element_type,
+                "name": element_name,
+                "text": element_text,
+            })
+            if len(candidates) >= MCP_TABLE_CONTEXT_MAX_CANDIDATES:
+                break
+
+        priority = {"GuiGridView": 0, "GuiCtrlGridView": 0, "GuiTableControl": 1, "GuiShell": 2}
+        candidates.sort(key=lambda item: (priority.get(item.get("type"), 7), item.get("id", "")))
+        return candidates
+
+    def _shorten_mcp_cell(self, value):
+        if value is None:
+            return ""
+        text = str(value)
+        if len(text) > MCP_TABLE_CONTEXT_MAX_CELL_CHARS:
+            return text[:MCP_TABLE_CONTEXT_MAX_CELL_CHARS].rstrip() + "..."
+        return text
+
+    def _compact_mcp_table_result(self, payload, candidate):
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("error") and "table_type" not in payload:
+            return None
+
+        columns = list(payload.get("columns") or [])
+        column_info = list(payload.get("column_info") or [])
+        if not columns and column_info:
+            columns = [str(item.get("name") or item.get("title") or "") for item in column_info]
+            columns = [item for item in columns if item]
+
+        if not columns and isinstance(payload.get("data"), list) and payload["data"]:
+            first_row = payload["data"][0]
+            if isinstance(first_row, dict):
+                columns = [
+                    key for key in first_row.keys()
+                    if not str(key).startswith("_")
+                ]
+
+        schema_limit = max(MCP_TABLE_CONTEXT_MAX_SCHEMA_COLUMNS, MCP_TABLE_CONTEXT_MAX_COLUMNS)
+        schema_columns = columns[:schema_limit]
+        row_columns = columns[:MCP_TABLE_CONTEXT_MAX_COLUMNS]
+        info_by_name = {}
+        for item in column_info:
+            if isinstance(item, dict):
+                name = str(item.get("name") or "")
+                if name:
+                    info_by_name[name] = {
+                        "name": name,
+                        "title": item.get("title", ""),
+                        "tooltip": item.get("tooltip", ""),
+                    }
+
+        rows = []
+        for row in list(payload.get("data") or [])[:MCP_TABLE_CONTEXT_MAX_ROWS]:
+            if isinstance(row, dict):
+                row_index = row.get("_absolute_row_index")
+                compact_row = {"row": row_index, "cells": {}}
+                for column in row_columns:
+                    compact_row["cells"][column] = self._shorten_mcp_cell(row.get(column))
+                if row_index is None:
+                    compact_row.pop("row", None)
+                rows.append(compact_row)
+            elif isinstance(row, list):
+                rows.append({
+                    "cells": [
+                        self._shorten_mcp_cell(value)
+                        for value in row[:MCP_TABLE_CONTEXT_MAX_COLUMNS]
+                    ]
+                })
+
+        return {
+            "table_id": payload.get("table_id") or candidate.get("id", ""),
+            "source_element_type": candidate.get("type", ""),
+            "table_type": payload.get("table_type", candidate.get("type", "")),
+            "total_rows": payload.get("total_rows"),
+            "rows_returned": payload.get("rows_returned", len(rows)),
+            "start_row": payload.get("start_row", payload.get("first_visible_row", 0)),
+            "visible_rows": payload.get("visible_rows"),
+            "columns": schema_columns,
+            "column_count": len(columns),
+            "column_info": [info_by_name.get(column, {"name": column}) for column in schema_columns],
+            "row_columns": row_columns,
+            "rows": rows,
+            "columns_only": bool(payload.get("columns_only")),
+            "rows_truncated": len(payload.get("data") or []) > len(rows),
+            "columns_truncated": len(columns) > len(schema_columns),
+            "row_columns_truncated": len(columns) > len(row_columns),
+        }
+
+    def _compact_mcp_shell_result(self, payload, candidate):
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("error"):
+            return {
+                "shell_id": candidate.get("id", ""),
+                "source_element_type": candidate.get("type", ""),
+                "error": payload.get("error", ""),
+            }
+        text = str(payload.get("text") or "")
+        html = str(payload.get("inner_html") or "")
+        return {
+            "shell_id": payload.get("shell_id") or candidate.get("id", ""),
+            "source_element_type": candidate.get("type", ""),
+            "type": payload.get("type", ""),
+            "sub_type": payload.get("sub_type", ""),
+            "url": payload.get("url", ""),
+            "text": text[:MCP_SHELL_CONTEXT_MAX_CHARS],
+            "text_truncated": len(text) > MCP_SHELL_CONTEXT_MAX_CHARS,
+            "html_preview": html[:MCP_SHELL_CONTEXT_MAX_CHARS] if not text else "",
+            "html_truncated": bool(html and len(html) > MCP_SHELL_CONTEXT_MAX_CHARS),
+        }
+
+    def _mcp_table_report_context_text(self, active_window, elements_tool, raw_elements):
+        if not MCP_READ_TABLES_IN_CONTEXT and not MCP_READ_SHELLS_IN_CONTEXT:
+            return ""
+
+        read_table_tool = self._first_available_mcp_tool(["sap_read_table"])
+        read_shell_tool = self._first_available_mcp_tool(["sap_read_shell_content"])
+        inspect_table_tool = self._first_available_mcp_tool(["sap_inspect_tables"])
+        if not MCP_READ_TABLES_IN_CONTEXT:
+            read_table_tool = ""
+            inspect_table_tool = ""
+        if not MCP_READ_SHELLS_IN_CONTEXT:
+            read_shell_tool = ""
+        if not read_table_tool and not read_shell_tool and not inspect_table_tool:
+            return ""
+
+        elements = self._mcp_elements_from_text(raw_elements)
+        table_candidates = self._mcp_table_candidates_from_elements(elements)
+
+        # The normal fast element scan runs at depth 2. Nested ALV/report shells
+        # are often deeper, so do one narrow, read-only, type-filtered discovery
+        # pass when needed.
+        if elements_tool and len(table_candidates) < MCP_TABLE_CONTEXT_MAX_TABLES:
+            container_id = f"{active_window}/usr" if str(active_window).startswith("wnd[") else "wnd[0]/usr"
+            try:
+                raw_table_elements = self._call_mcp_tool_text(elements_tool, {
+                    "container_id": container_id,
+                    "max_depth": MCP_TABLE_CONTEXT_DISCOVERY_DEPTH,
+                    "type_filter": MCP_TABLE_CONTEXT_TYPE_FILTER,
+                    "changeable_only": False,
+                })
+                extra_elements = self._mcp_elements_from_text(raw_table_elements)
+                seen = {item.get("id") for item in table_candidates}
+                for item in self._mcp_table_candidates_from_elements(extra_elements):
+                    if item.get("id") not in seen:
+                        table_candidates.append(item)
+                        seen.add(item.get("id"))
+                        if len(table_candidates) >= MCP_TABLE_CONTEXT_MAX_CANDIDATES:
+                            break
+            except Exception as exc:
+                table_candidates.append({
+                    "id": "",
+                    "type": "discovery_error",
+                    "error": str(exc),
+                })
+
+        if (
+            elements_tool
+            and MCP_TABLE_CONTEXT_BROAD_DISCOVERY_ON_EMPTY
+            and not [item for item in table_candidates if item.get("id")]
+        ):
+            container_id = f"{active_window}/usr" if str(active_window).startswith("wnd[") else "wnd[0]/usr"
+            try:
+                raw_broad_elements = self._call_mcp_tool_text(elements_tool, {
+                    "container_id": container_id,
+                    "max_depth": MCP_TABLE_CONTEXT_BROAD_DISCOVERY_DEPTH,
+                    "type_filter": "",
+                    "changeable_only": False,
+                })
+                broad_elements = self._mcp_elements_from_text(raw_broad_elements)
+                seen = {item.get("id") for item in table_candidates}
+                for item in self._mcp_table_candidates_from_elements(broad_elements):
+                    if item.get("id") not in seen:
+                        item["candidate_source"] = "broad_discovery"
+                        table_candidates.append(item)
+                        seen.add(item.get("id"))
+                        if len(table_candidates) >= MCP_TABLE_CONTEXT_MAX_CANDIDATES:
+                            break
+            except Exception as exc:
+                table_candidates.append({
+                    "id": "",
+                    "type": "broad_discovery_error",
+                    "error": str(exc),
+                })
+
+        tables = []
+        shells = []
+        errors = []
+        inspect_report = {}
+
+        if (
+            inspect_table_tool
+            and MCP_TABLE_CONTEXT_INSPECT_ON_EMPTY
+            and len([item for item in table_candidates if item.get("id")]) < MCP_TABLE_CONTEXT_MAX_TABLES
+        ):
+            container_id = f"{active_window}/usr" if str(active_window).startswith("wnd[") else "wnd[0]/usr"
+            try:
+                raw_inspect = self._call_mcp_tool_text(inspect_table_tool, {
+                    "container_id": container_id,
+                    "max_depth": MCP_TABLE_CONTEXT_BROAD_DISCOVERY_DEPTH,
+                    "max_rows": MCP_TABLE_CONTEXT_MAX_ROWS,
+                    "include_rows": MCP_TABLE_CONTEXT_INSPECT_INCLUDE_ROWS,
+                    "use_focus": True,
+                })
+                parsed_inspect = self._parse_mcp_json_text(raw_inspect)
+                if isinstance(parsed_inspect, dict):
+                    inspect_report = parsed_inspect
+                    seen = {item.get("id") for item in table_candidates}
+                    for item in parsed_inspect.get("candidates") or []:
+                        if not isinstance(item, dict):
+                            continue
+                        item_id = item.get("id", "")
+                        if item_id and item_id not in seen:
+                            item["candidate_source"] = item.get("candidate_source", "inspect_tables")
+                            table_candidates.append(item)
+                            seen.add(item_id)
+                    for raw_table in parsed_inspect.get("tables") or []:
+                        if not isinstance(raw_table, dict):
+                            continue
+                        candidate = {
+                            "id": raw_table.get("table_id") or raw_table.get("id", ""),
+                            "type": raw_table.get("table_type") or raw_table.get("source_element_type", ""),
+                        }
+                        compact = self._compact_mcp_table_result(raw_table, candidate)
+                        if compact and compact.get("columns"):
+                            compact["source"] = "sap_inspect_tables"
+                            tables.append(compact)
+                    for item in parsed_inspect.get("errors") or []:
+                        if isinstance(item, dict):
+                            item = dict(item)
+                            item["tool"] = inspect_table_tool
+                            errors.append(item)
+                else:
+                    errors.append({
+                        "tool": inspect_table_tool,
+                        "phase": "inspect_tables",
+                        "error": "unexpected inspect response",
+                    })
+            except Exception as exc:
+                errors.append({
+                    "tool": inspect_table_tool,
+                    "phase": "inspect_tables",
+                    "error": str(exc),
+                })
+
+        loaded_table_ids = {
+            table.get("table_id")
+            for table in tables
+            if table.get("table_id")
+        }
+        for candidate in table_candidates:
+            if len(tables) >= MCP_TABLE_CONTEXT_MAX_TABLES:
+                break
+            table_id = candidate.get("id", "")
+            if not table_id:
+                if candidate.get("error"):
+                    errors.append(candidate)
+                continue
+            if table_id in loaded_table_ids:
+                continue
+
+            table_read_ok = False
+            if MCP_READ_TABLES_IN_CONTEXT and read_table_tool:
+                schema_compact = None
+                if MCP_TABLE_CONTEXT_SCHEMA_FIRST:
+                    try:
+                        raw_schema = self._call_mcp_tool_text(read_table_tool, {
+                            "table_id": table_id,
+                            "max_rows": 1,
+                            "columns": "",
+                            "columns_only": True,
+                            "start_row": 0,
+                        })
+                        parsed_schema = self._parse_mcp_json_text(raw_schema)
+                        schema_compact = self._compact_mcp_table_result(parsed_schema, candidate)
+                        if isinstance(parsed_schema, dict) and parsed_schema.get("error"):
+                            errors.append({
+                                "table_id": table_id,
+                                "type": candidate.get("type", ""),
+                                "tool": read_table_tool,
+                                "phase": "schema",
+                                "error": str(parsed_schema.get("error") or ""),
+                            })
+                    except Exception as exc:
+                        errors.append({
+                            "table_id": table_id,
+                            "type": candidate.get("type", ""),
+                            "tool": read_table_tool,
+                            "phase": "schema",
+                            "error": str(exc),
+                        })
+                try:
+                    raw_table = self._call_mcp_tool_text(read_table_tool, {
+                        "table_id": table_id,
+                        "max_rows": MCP_TABLE_CONTEXT_MAX_ROWS,
+                        "columns": "",
+                        "columns_only": False,
+                        "start_row": 0,
+                    })
+                    parsed_table = self._parse_mcp_json_text(raw_table)
+                    compact = self._compact_mcp_table_result(parsed_table, candidate)
+                    if compact:
+                        if schema_compact and not compact.get("columns"):
+                            compact["columns"] = schema_compact.get("columns", [])
+                            compact["column_info"] = schema_compact.get("column_info", [])
+                            compact["column_count"] = schema_compact.get("column_count", 0)
+                        tables.append(compact)
+                        table_read_ok = True
+                    elif isinstance(parsed_table, dict) and parsed_table.get("error"):
+                        errors.append({
+                            "table_id": table_id,
+                            "type": candidate.get("type", ""),
+                            "tool": read_table_tool,
+                            "error": str(parsed_table.get("error") or ""),
+                        })
+                except Exception as exc:
+                    errors.append({
+                        "table_id": table_id,
+                        "type": candidate.get("type", ""),
+                        "tool": read_table_tool,
+                        "phase": "rows",
+                        "error": str(exc),
+                    })
+                if not table_read_ok and schema_compact and schema_compact.get("columns"):
+                    tables.append(schema_compact)
+                    table_read_ok = True
+
+            if (
+                not table_read_ok
+                and MCP_READ_SHELLS_IN_CONTEXT
+                and read_shell_tool
+                and candidate.get("type") == "GuiShell"
+            ):
+                try:
+                    raw_shell = self._call_mcp_tool_text(read_shell_tool, {"shell_id": table_id})
+                    parsed_shell = self._parse_mcp_json_text(raw_shell)
+                    compact_shell = self._compact_mcp_shell_result(parsed_shell, candidate)
+                    if compact_shell and (
+                        compact_shell.get("text")
+                        or compact_shell.get("html_preview")
+                        or compact_shell.get("url")
+                        or compact_shell.get("error")
+                    ):
+                        shells.append(compact_shell)
+                except Exception as exc:
+                    errors.append({
+                        "shell_id": table_id,
+                        "type": candidate.get("type", ""),
+                        "tool": read_shell_tool,
+                        "error": str(exc),
+                    })
+
+        if not tables and not shells and not errors:
+            return ""
+
+        context = {
+            "backend": "mcp_table_report_context",
+            "read_tools": {
+                "table": read_table_tool,
+                "shell": read_shell_tool,
+                "inspect": inspect_table_tool,
+            },
+            "inspect_focus": (inspect_report.get("focused_element") if isinstance(inspect_report, dict) else None),
+            "candidate_count": len([item for item in table_candidates if item.get("id")]),
+            "candidates": [
+                {
+                    "id": item.get("id", ""),
+                    "type": item.get("type", ""),
+                    "name": item.get("name", ""),
+                    "text": item.get("text", ""),
+                    "source": item.get("candidate_source", "filtered_discovery"),
+                }
+                for item in table_candidates
+                if item.get("id")
+            ][:MCP_TABLE_CONTEXT_MAX_CANDIDATES],
+            "tables": tables,
+            "shells": shells[:MCP_TABLE_CONTEXT_MAX_TABLES],
+            "errors": errors[:8],
+            "instruction_to_agent": (
+                "Use tables[].columns and column_info for column/schema questions, even when rows is empty. "
+                "tables[].columns may include more schema columns than each row; row_columns lists the subset included in rows[].cells. "
+                "Use tables[].rows for SAP report/list/table data answers. "
+                "For ALV reports, total_rows may exceed rows_returned; request pagination "
+                "with sap_read_table(start_row=...) only if the user needs more rows."
+            ),
+        }
+        return "### mcp_table_report_context\n" + json.dumps(context, ensure_ascii=False, indent=2)
 
     def _mcp_field_write_failed(self, tool_result):
         if tool_result.get("backend") != "mcp":
@@ -1036,7 +1625,7 @@ class SAPAgent:
             "screen_summary": screen_after,
         }
 
-    def _mcp_fast_screen_context_text(self):
+    def _mcp_fast_screen_context_text(self, purpose="auto"):
         parts = []
         snapshot_tool = self._first_available_mcp_tool(["sap_get_light_snapshot"])
         screen_info_tool = self._first_available_mcp_tool([
@@ -1054,6 +1643,18 @@ class SAPAgent:
         fingerprint = ""
         screen_events = []
         popup_already_read = False
+        raw_elements_for_tables = ""
+        evidence_mode = purpose in ("ask", "solve", "study")
+        element_scan_depth = (
+            max(MCP_FAST_SCREEN_MAX_DEPTH, MCP_EVIDENCE_SCREEN_MAX_DEPTH)
+            if evidence_mode
+            else MCP_FAST_SCREEN_MAX_DEPTH
+        )
+        element_type_filter = (
+            MCP_EVIDENCE_SCREEN_TYPE_FILTER
+            if evidence_mode
+            else MCP_FAST_SCREEN_TYPE_FILTER
+        )
         if snapshot_tool:
             raw_snapshot = self._call_mcp_tool_text(snapshot_tool, {})
             parts.append(f"### {snapshot_tool}\n{raw_snapshot}")
@@ -1106,26 +1707,61 @@ class SAPAgent:
 
         if elements_tool and not skip_elements:
             container_id = f"{active_window}/usr" if active_window.startswith("wnd[") else "wnd[0]/usr"
-            if self._mcp_cached_elements_valid(fingerprint, container_id):
+            if self._mcp_cached_elements_valid(
+                fingerprint,
+                container_id,
+                min_depth=element_scan_depth,
+                type_filter=element_type_filter,
+            ):
                 raw_elements = self._mcp_screen_cache.get("elements_text", "")
+                raw_elements_for_tables = raw_elements
                 parts.append(f"### {elements_tool} fast filtered (cache hit)\n{raw_elements}")
             else:
                 try:
                     raw_elements = self._call_mcp_tool_text(elements_tool, {
                         "container_id": container_id,
-                        "max_depth": MCP_FAST_SCREEN_MAX_DEPTH,
-                        "type_filter": MCP_FAST_SCREEN_TYPE_FILTER,
+                        "max_depth": element_scan_depth,
+                        "type_filter": element_type_filter,
                         "changeable_only": MCP_FAST_SCREEN_CHANGEABLE_ONLY,
                     })
-                    self._remember_mcp_elements(fingerprint, container_id, raw_elements)
+                    self._remember_mcp_elements(
+                        fingerprint,
+                        container_id,
+                        raw_elements,
+                        max_depth=element_scan_depth,
+                        type_filter=element_type_filter,
+                    )
+                    raw_elements_for_tables = raw_elements
                     parts.append(f"### {elements_tool} fast filtered\n{raw_elements}")
                 except Exception:
                     cache = self._mcp_screen_cache
                     if cache.get("fingerprint") == fingerprint and cache.get("container_id") == container_id:
                         raw_elements = cache.get("elements_text", "")
+                        raw_elements_for_tables = raw_elements
                         parts.append(f"### {elements_tool} fast filtered (stale cache fallback)\n{raw_elements}")
                     else:
                         raise
+
+        table_context = self._mcp_table_report_context_text(
+            active_window=active_window,
+            elements_tool=elements_tool,
+            raw_elements=raw_elements_for_tables,
+        )
+        if table_context:
+            parts.append(table_context)
+
+        if purpose in ("ask", "solve", "study"):
+            quality = {
+                "purpose": purpose,
+                "element_scan_depth": element_scan_depth,
+                "element_count": len(self._mcp_elements_from_text(raw_elements_for_tables)),
+                "has_table_report_context": bool(table_context),
+                "usable_evidence": self._mcp_text_has_useful_screen_evidence("\n\n".join(parts)),
+            }
+            parts.append(
+                "### mcp_context_quality\n"
+                f"{json.dumps(quality, ensure_ascii=False, indent=2)}"
+            )
 
         recent_writes = self._mcp_recent_writes_text()
         if recent_writes:
@@ -1137,7 +1773,7 @@ class SAPAgent:
 
         return "\n\n".join(parts) if parts else None
 
-    def _mcp_screen_context_text(self):
+    def _mcp_screen_context_text(self, purpose="auto"):
         """Get screen context from MCP as raw text for LLM consumption."""
         if not self.mcp_client:
             return None
@@ -1153,7 +1789,7 @@ class SAPAgent:
         try:
             started_at = time.perf_counter()
             if MCP_SAP_FAST_MODE:
-                fast_text = self._mcp_fast_screen_context_text()
+                fast_text = self._mcp_fast_screen_context_text(purpose=purpose)
                 if fast_text:
                     self._last_screen_context_text = fast_text
                     self._last_screen_backend = "mcp"
@@ -1202,8 +1838,28 @@ class SAPAgent:
             tuple[str, str] -> (context_text, backend)
         """
         started_at = time.perf_counter()
-        mcp_text = self._mcp_screen_context_text()
+        mcp_text = self._mcp_screen_context_text(purpose=purpose)
         if mcp_text:
+            if (
+                purpose in ("ask", "solve", "study")
+                and MCP_EVIDENCE_LEGACY_FALLBACK_ON_EMPTY
+                and not self._mcp_text_has_useful_screen_evidence(mcp_text)
+            ):
+                try:
+                    local_text, _screen_state = self._local_screen_context_text(session, purpose=purpose)
+                    mcp_text = (
+                        f"{mcp_text}\n\n"
+                        "### legacy_screen_summary_fallback\n"
+                        f"{local_text}"
+                    )
+                except Exception as exc:
+                    mcp_text = (
+                        f"{mcp_text}\n\n"
+                        "### legacy_screen_summary_fallback_error\n"
+                        f"{exc}"
+                    )
+            self._last_screen_context_text = mcp_text
+            self._last_screen_backend = "mcp"
             self._timing_log(f"screen context ({purpose}, mcp)", started_at)
             return mcp_text, "mcp"
 
@@ -1548,7 +2204,23 @@ class SAPAgent:
     def _compact_tables(self, tables, max_tables=4, max_rows=24, max_cells=8):
         compacted = []
         for table in tables[:max_tables]:
-            item = {"id": table.get("id", ""), "rows": []}
+            columns = list(table.get("columns", []) or [])
+            schema_limit = max(MCP_TABLE_CONTEXT_MAX_SCHEMA_COLUMNS, MCP_TABLE_CONTEXT_MAX_COLUMNS)
+            schema_columns = columns[:schema_limit]
+            row_columns = columns[:MCP_TABLE_CONTEXT_MAX_COLUMNS]
+            item = {
+                "id": table.get("id", ""),
+                "table_type": table.get("table_type", ""),
+                "columns": schema_columns,
+                "column_count": table.get("column_count", len(columns)),
+                "total_rows": table.get("total_rows"),
+                "visible_rows": table.get("visible_rows"),
+                "columns_only": bool(table.get("columns_only")),
+                "row_columns": row_columns,
+                "rows": [],
+            }
+            if table.get("column_info"):
+                item["column_info"] = list(table.get("column_info") or [])[:schema_limit]
             rows = table.get("rows", [])
             for row in rows[:max_rows]:
                 row_item = {
@@ -1558,6 +2230,8 @@ class SAPAgent:
                 }
                 item["rows"].append(row_item)
             item["rows_truncated"] = len(rows) > max_rows
+            item["columns_truncated"] = len(columns) > len(item["columns"])
+            item["row_columns_truncated"] = len(columns) > len(row_columns)
             compacted.append(item)
         return compacted
 
