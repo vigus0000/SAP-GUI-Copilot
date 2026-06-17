@@ -12,6 +12,7 @@ SAP GUI Copilot — CLI 入口 (Phase 4 — Agentic Coach)
 - /recordings  → 列出所有已錄製的 SOP
 - /play [名稱]  → 顯示指定 SOP 的操作步驟
 - /study [名稱]  → AI 教練引導執行既有 SOP / Skill
+- /macro       → 執行或引導結構化 Markdown Macro
 - /ask         → 切換到 Ask Mode（問答模式）
 - /solve       → 切換到 Solve Mode（問題排解模式）
 - /auto        → 切換回 Auto Mode（自動代操）
@@ -39,6 +40,7 @@ from sap_monitor import SAPMonitor
 from sap_recorder import SAPRecorder
 from sap_knowledge_library import SAPKnowledgeLibrary
 from sap_skill_library import SAPSkillLibrary
+from sap_macro_library import SAPMacroError, SAPMacroLibrary, macro_result_can_fallback_to_auto
 from mcp_client import get_default_sync_client
 from sap_table_inspector import format_table_inspection, inspect_current_tables
 
@@ -135,6 +137,7 @@ def print_banner():
     /recordings    列出所有已錄製的 SOP
     /play [名稱]    顯示指定 SOP 的操作步驟
     /study [名稱]   AI 教練引導既有 SOP；--draft 才啟動探索草稿
+    /macro         執行或引導結構化 Markdown Macro
     /knowledge      匯入/搜尋/蒸餾 Study Mode knowledge
     /skills         管理蒸餾草稿與正式 skill
     /ask           切換到 Ask Mode（問答模式）
@@ -483,6 +486,189 @@ def handle_skills_command(skill_library, knowledge_library, arg):
         print(f"{Colors.RED}  Skills 指令失敗: {exc}{Colors.RESET}\n")
 
 
+def print_macro_usage():
+    print(f"{Colors.YELLOW}  用法:{Colors.RESET}")
+    print(f"{Colors.DIM}    /macros{Colors.RESET}")
+    print(f"{Colors.DIM}    /macro list{Colors.RESET}")
+    print(f"{Colors.DIM}    /macro show <macro-name>{Colors.RESET}")
+    print(f"{Colors.DIM}    /macro run <macro-name> key=value ...{Colors.RESET}")
+    print(f"{Colors.DIM}    /macro study <macro-name> key=value ...{Colors.RESET}")
+    print(f"{Colors.DIM}    /macro learn recordings{Colors.RESET}")
+    print(f"{Colors.DIM}    /macro audit <macro-name>{Colors.RESET}")
+    print(f"{Colors.DIM}    /macro doctor <macro-name>{Colors.RESET}")
+    print(f"{Colors.DIM}    /study --macro <macro-name> key=value ...{Colors.RESET}\n")
+
+
+def print_macros_list(macro_library):
+    macros = macro_library.list_macros()
+    if not macros:
+        print(f"\n{Colors.YELLOW}  尚無 Macro{Colors.RESET}")
+        print(f"{Colors.DIM}     請將指定格式的 Markdown 放入 macros/，再使用 /macro run 或 /macro study{Colors.RESET}\n")
+        return
+
+    print(f"\n{Colors.CYAN}── 可用 Macro ──{Colors.RESET}")
+    for index, item in enumerate(macros, 1):
+        tags = ", ".join(item.get("tags") or [])
+        tag_text = f" │ {tags}" if tags else ""
+        print(
+            f"  {Colors.WHITE}{index}. {item.get('name')}{Colors.RESET} "
+            f"{Colors.DIM}[{item.get('mode')}] inputs={item.get('input_count')} "
+            f"steps={item.get('step_count')}{tag_text}{Colors.RESET}"
+        )
+        if item.get("description"):
+            print(f"     {Colors.DIM}{item.get('description')}{Colors.RESET}")
+        print(f"     {Colors.DIM}{item.get('filepath')}{Colors.RESET}")
+    print()
+
+
+def _prompt_macro_input(item):
+    label = f" ({item.label})" if item.label else ""
+    default_text = f" [{item.default}]" if item.default else ""
+    value = input(f"{Colors.CYAN}  Macro input {item.name}{label}{default_text} > {Colors.RESET}").strip()
+    return value or item.default
+
+
+def _prepare_macro_inputs(macro_library, macro, values):
+    return macro_library.prompt_missing_inputs(
+        macro,
+        values,
+        prompt_callback=_prompt_macro_input,
+    )
+
+
+def start_macro_study(agent, sap, macro_library, macro_name, values):
+    macro = macro_library.load_macro(macro_name)
+    runtime_values = _prepare_macro_inputs(macro_library, macro, values)
+    sop_text = macro_library.format_study_context(macro, runtime_values)
+
+    print(f"\n{Colors.CYAN}📘 Study Macro: {macro.name}{Colors.RESET}")
+    if macro.mode == "auto":
+        print(f"{Colors.YELLOW}  注意: 此 Macro 標記為 auto；Study 會只用它作為參考引導。{Colors.RESET}")
+    print(f"{Colors.DIM}  Macro 只作為結構化參考；Study Mode 仍會逐步引導使用者操作。{Colors.RESET}\n")
+
+    agent.set_mode("study")
+    session = sap.get_session()
+    response = agent.process_message(
+        session,
+        "請根據以下 Structured Macro，從第一步開始用互動式教練方式引導我完成操作。",
+        extra_context=sop_text,
+    )
+    print(f"\n{Colors.MAGENTA}  AI > {Colors.RESET}{response}\n")
+    print(f"{Colors.CYAN}  📘 Study Mode 仍保持啟用；輸入 /auto、/ask 或 /solve 可切換模式。{Colors.RESET}\n")
+
+
+def run_macro(agent, sap, macro_library, macro_name, values):
+    macro = macro_library.load_macro(macro_name)
+    if macro.mode == "study":
+        raise SAPMacroError("此 Macro 標記為 mode=study，不能用 /macro run 直接操作；請改用 /macro study 或 /study --macro")
+    runtime_values = _prepare_macro_inputs(macro_library, macro, values)
+    print(f"\n{Colors.CYAN}▶ Macro Run: {macro.name}{Colors.RESET}")
+    print(f"{Colors.DIM}  共 {len(macro.steps)} 個步驟；動態輸入: {json.dumps(runtime_values, ensure_ascii=False)}{Colors.RESET}")
+    session = sap.get_session()
+    result = macro_library.execute_macro(
+        session,
+        agent,
+        macro,
+        runtime_values,
+        log_callback=lambda text: print(f"{Colors.DIM}  {text}{Colors.RESET}"),
+    )
+    if result.get("success"):
+        print(f"{Colors.GREEN}  ✅ Macro 執行完成: {macro.name}{Colors.RESET}\n")
+    else:
+        print(f"{Colors.RED}  ❌ Macro 執行完成但有失敗步驟: {macro.name}{Colors.RESET}\n")
+    return result
+
+
+def try_run_matched_macro(agent, sap, macro_library, user_input):
+    if agent.mode != "auto":
+        return False
+    match = macro_library.match_request(user_input)
+    if not match:
+        return False
+    macro = match["macro"]
+    reasons = ", ".join(match.get("reasons") or [])
+    print(
+        f"{Colors.CYAN}  ⚡ Macro matched: {macro.name} "
+        f"(score={match.get('score')}, reasons={reasons}){Colors.RESET}"
+    )
+    print(f"{Colors.DIM}     將直接走 Macro 嚴格流程；不進入 ReAct 迭代。{Colors.RESET}")
+    result = run_macro(agent, sap, macro_library, macro.name, match.get("values") or {})
+    if macro_result_can_fallback_to_auto(result):
+        print(f"{Colors.YELLOW}  Macro 在尚未寫入欄位/按鈕前失敗，改回 Auto ReAct fallback。{Colors.RESET}\n")
+        return False
+    return True
+
+
+def handle_macro_command(macro_library, agent, sap, arg):
+    parts = str(arg or "").strip().split(maxsplit=1)
+    if not parts:
+        print_macro_usage()
+        return
+    subcommand = parts[0].lower()
+    rest = parts[1].strip() if len(parts) > 1 else ""
+
+    try:
+        if subcommand in {"list", "ls"}:
+            print_macros_list(macro_library)
+        elif subcommand == "show":
+            macro_name, _values = macro_library.parse_values(rest)
+            if not macro_name:
+                print_macro_usage()
+                return
+            macro = macro_library.load_macro(macro_name)
+            print(f"\n{Colors.CYAN}── Macro Detail ──{Colors.RESET}")
+            print(macro_library.format_summary(macro))
+            print()
+        elif subcommand == "run":
+            macro_name, values = macro_library.parse_values(rest)
+            if not macro_name:
+                print_macro_usage()
+                return
+            run_macro(agent, sap, macro_library, macro_name, values)
+        elif subcommand == "study":
+            macro_name, values = macro_library.parse_values(rest)
+            if not macro_name:
+                print_macro_usage()
+                return
+            start_macro_study(agent, sap, macro_library, macro_name, values)
+        elif subcommand == "learn":
+            target = rest or "recordings"
+            if target.lower() != "recordings":
+                raise SAPMacroError("目前 /macro learn 僅支援 recordings")
+            summary = macro_library.learn_from_recordings("recordings")
+            print(f"\n{Colors.CYAN}── Macro Learn Recordings ──{Colors.RESET}")
+            print(json.dumps(summary, ensure_ascii=False, indent=2))
+            print()
+        elif subcommand == "audit":
+            macro_name, _values = macro_library.parse_values(rest)
+            if not macro_name:
+                print_macro_usage()
+                return
+            print()
+            print(macro_library.audit_macro(macro_name))
+            print()
+        elif subcommand == "doctor":
+            macro_name, _values = macro_library.parse_values(rest)
+            if not macro_name:
+                print_macro_usage()
+                return
+            print()
+            print(macro_library.doctor_macro(sap.get_session(), agent, macro_name))
+            print()
+        else:
+            macro_name, values = macro_library.parse_values(str(arg or ""))
+            if macro_name:
+                run_macro(agent, sap, macro_library, macro_name, values)
+            else:
+                print_macro_usage()
+    except (FileNotFoundError, SAPMacroError) as exc:
+        print(f"{Colors.RED}  Macro 指令失敗: {exc}{Colors.RESET}\n")
+    except Exception as exc:
+        import traceback
+        print(f"{Colors.RED}  Macro 執行例外: {exc}{Colors.RESET}")
+        print(f"{Colors.DIM}{traceback.format_exc()}{Colors.RESET}\n")
+
+
 def _screen_brief(screen_state):
     """Build a compact screen summary for learned Study Mode skills."""
     if not screen_state:
@@ -645,6 +831,7 @@ def main():
     recorder = SAPRecorder()
     skill_library = SAPSkillLibrary()
     knowledge_library = SAPKnowledgeLibrary()
+    macro_library = SAPMacroLibrary()
 
     # 初始化 Monitor（但不啟動，等使用者開始錄製時才啟動）
     monitor = None  # 延遲建立，因為 session 可能隨時需要刷新
@@ -851,6 +1038,19 @@ def main():
                     parts[1].strip() if len(parts) > 1 else "",
                 )
 
+            # --- /macro ... ---
+            elif cmd == "/macros":
+                print_macros_list(macro_library)
+
+            elif cmd == "/macro" or cmd.startswith("/macro "):
+                parts = user_input.split(maxsplit=1)
+                handle_macro_command(
+                    macro_library,
+                    agent,
+                    sap,
+                    parts[1].strip() if len(parts) > 1 else "",
+                )
+
             # --- /study [名稱] ---
             elif cmd == "/study" or cmd.startswith("/study "):
                 if recorder.is_recording:
@@ -862,7 +1062,23 @@ def main():
                     print(f"{Colors.YELLOW}  用法: /study [SOP名稱]{Colors.RESET}")
                     print(f"{Colors.DIM}       /study --draft [教學目標]      明確啟動探索草稿，不保存 skill{Colors.RESET}")
                     print(f"{Colors.DIM}       /study --save-draft [教學目標] 明確啟動探索草稿並保存為 skill{Colors.RESET}")
+                    print(f"{Colors.DIM}       /study --macro [Macro名稱] key=value ...  使用結構化 Macro 引導{Colors.RESET}")
                     print(f"{Colors.DIM}  使用 /recordings 查看所有錄製{Colors.RESET}")
+                    continue
+
+                raw_study_arg = parts[1].strip()
+                if raw_study_arg.lower().startswith(("--macro ", "/macro ")):
+                    macro_arg = raw_study_arg.split(maxsplit=1)[1].strip() if len(raw_study_arg.split(maxsplit=1)) > 1 else ""
+                    macro_name, macro_values = macro_library.parse_values(macro_arg)
+                    if not macro_name:
+                        print_macro_usage()
+                        continue
+                    try:
+                        start_macro_study(agent, sap, macro_library, macro_name, macro_values)
+                    except Exception as exc:
+                        import traceback
+                        print(f"{Colors.RED}  Macro Study 錯誤: {exc}{Colors.RESET}")
+                        print(f"{Colors.DIM}{traceback.format_exc()}{Colors.RESET}\n")
                     continue
 
                 sop_name, allow_draft_study, save_draft_skill = parse_study_request(parts[1].strip())
@@ -870,6 +1086,7 @@ def main():
                     print(f"{Colors.YELLOW}  用法: /study [SOP名稱]{Colors.RESET}")
                     print(f"{Colors.DIM}       /study --draft [教學目標]      明確啟動探索草稿，不保存 skill{Colors.RESET}")
                     print(f"{Colors.DIM}       /study --save-draft [教學目標] 明確啟動探索草稿並保存為 skill{Colors.RESET}")
+                    print(f"{Colors.DIM}       /study --macro [Macro名稱] key=value ...  使用結構化 Macro 引導{Colors.RESET}")
                     continue
                 canonical_sop_name = skill_library.canonical_skill_name(sop_name)
 
@@ -987,7 +1204,7 @@ def main():
             # --- 未知指令 ---
             elif user_input.startswith("/"):
                 print(f"{Colors.YELLOW}  未知指令: {user_input}{Colors.RESET}")
-                print(f"{Colors.DIM}  可用指令: /scan, /record, /stop, /recordings, /play, /study, /knowledge, /skills, /ask, /solve, /auto, /mcp, /connect, /login, /reset, /quit{Colors.RESET}")
+                print(f"{Colors.DIM}  可用指令: /scan, /record, /stop, /recordings, /play, /study, /macro, /knowledge, /skills, /ask, /solve, /auto, /mcp, /connect, /login, /reset, /quit{Colors.RESET}")
 
             # ===== 自然語言指令 → AI Agent =====
             else:
@@ -999,6 +1216,9 @@ def main():
 
                 print()
                 try:
+                    if try_run_matched_macro(agent, sap, macro_library, user_input):
+                        continue
+
                     # 如果是 Ask/Solve Mode 且有錄製紀錄，附上最近的 SOP 摘要作為上下文
                     extra_context = ""
                     if agent.mode in ("ask", "solve"):

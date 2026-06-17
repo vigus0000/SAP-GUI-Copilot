@@ -145,6 +145,9 @@ MCP_FAST_SCREEN_TYPE_FILTER = os.getenv(
         "GuiOkCodeField",
     ]),
 )
+SAP_MACRO_SCREEN_MAX_DEPTH = int(os.getenv("SAP_MACRO_SCREEN_MAX_DEPTH", str(max(MCP_FAST_SCREEN_MAX_DEPTH, MCP_EVIDENCE_SCREEN_MAX_DEPTH))))
+SAP_MACRO_SCREEN_TYPE_FILTER = os.getenv("SAP_MACRO_SCREEN_TYPE_FILTER", MCP_EVIDENCE_SCREEN_TYPE_FILTER)
+SAP_MACRO_SCREEN_CHANGEABLE_ONLY = env_enabled("SAP_MACRO_SCREEN_CHANGEABLE_ONLY", "false")
 MCP_CORE_TOOL_NAMES = set(env_list(
     "MCP_SAP_CORE_TOOLS",
     ",".join([
@@ -1766,6 +1769,7 @@ class SAPAgent:
 
     def _legacy_tool_name_for_mcp(self, tool_name):
         aliases = {
+            "sap_execute_transaction": "set_tcode",
             "sap_set_text": "set_text",
             "sap_set_field": "set_text",
             "sap_enter_text": "set_text",
@@ -1773,6 +1777,7 @@ class SAPAgent:
             "sap_select_dropdown": "select_combo",
             "sap_click": "click",
             "sap_press_button": "click",
+            "sap_select_tab": "click",
             "sap_send_vkey": "send_vkey",
             "sap_send_key": "send_vkey",
             "sap_set_tcode": "set_tcode",
@@ -1780,12 +1785,16 @@ class SAPAgent:
             "sap_handle_popup": "handle_popup",
             "sap_read_checkbox": "read_checkbox",
             "sap_set_checkbox": "set_checkbox",
+            "sap_select_checkbox": "set_checkbox",
+            "sap_select_radio_button": "set_checkbox",
+            "sap_select_combobox_entry": "select_combo",
             "sap_select_table_row": "select_table_row",
             "sap_get_screen_elements": "scan_sap_screen",
             "sap_get_screen": "scan_sap_screen",
             "sap_scan_screen": "scan_sap_screen",
             "sap_read_editor_text": "read_editor_text",
             "sap_set_editor_text": "set_editor_text",
+            "sap_set_textedit": "set_editor_text",
             "sap_visualize_element": "visualize_element",
             "sap_set_focus": "visualize_element",
         }
@@ -1804,22 +1813,181 @@ class SAPAgent:
         if legacy_tool_name == "set_text":
             if "text" in normalized and "value" not in normalized:
                 normalized["value"] = normalized.pop("text")
+            if "field_id" in normalized and "element_id" not in normalized:
+                normalized["element_id"] = normalized.pop("field_id")
         elif legacy_tool_name == "select_combo":
             if "text" in normalized and "value" not in normalized and "key" not in normalized:
                 normalized["value"] = normalized["text"]
+            if "key_or_value" in normalized and "value" not in normalized and "key" not in normalized:
+                normalized["value"] = normalized.pop("key_or_value")
+            if "combobox_id" in normalized and "element_id" not in normalized:
+                normalized["element_id"] = normalized.pop("combobox_id")
         elif legacy_tool_name == "send_vkey":
             if "key" in normalized and "vkey" not in normalized:
-                normalized["vkey"] = normalized.pop("key")
+                normalized["vkey"] = self._sap_key_to_vkey(normalized.pop("key"))
         elif legacy_tool_name == "set_tcode":
             if "transaction" in normalized and "tcode" not in normalized:
                 normalized["tcode"] = normalized.pop("transaction")
             if "transaction_code" in normalized and "tcode" not in normalized:
                 normalized["tcode"] = normalized.pop("transaction_code")
+            if "tcode" not in normalized and "code" in normalized:
+                normalized["tcode"] = normalized.pop("code")
         elif legacy_tool_name == "set_checkbox":
             if "checked" in normalized and "selected" not in normalized:
                 normalized["selected"] = normalized.pop("checked")
+            if "checkbox_id" in normalized and "element_id" not in normalized:
+                normalized["element_id"] = normalized.pop("checkbox_id")
+            if "radio_id" in normalized and "element_id" not in normalized:
+                normalized["element_id"] = normalized.pop("radio_id")
+            if "selected" not in normalized:
+                normalized["selected"] = True
+        elif legacy_tool_name == "click":
+            if "button_id" in normalized and "element_id" not in normalized:
+                normalized["element_id"] = normalized.pop("button_id")
+            if "tab_id" in normalized and "element_id" not in normalized:
+                normalized["element_id"] = normalized.pop("tab_id")
+        elif legacy_tool_name == "set_editor_text":
+            if "textedit_id" in normalized and "element_id" not in normalized:
+                normalized["element_id"] = normalized.pop("textedit_id")
+            if "text" not in normalized and "value" in normalized:
+                normalized["text"] = normalized.pop("value")
+        elif legacy_tool_name == "visualize_element":
+            if "id" in normalized and "element_id" not in normalized:
+                normalized["element_id"] = normalized.pop("id")
 
         return normalized
+
+    @staticmethod
+    def _sap_key_to_vkey(key):
+        if isinstance(key, int):
+            return key
+        text = str(key or "").strip()
+        if text.isdigit():
+            return int(text)
+        aliases = {
+            "enter": 0,
+            "f1": 1,
+            "f2": 2,
+            "f3": 3,
+            "back": 3,
+            "f4": 4,
+            "f5": 5,
+            "refresh": 5,
+            "f6": 6,
+            "f7": 7,
+            "f8": 8,
+            "execute": 8,
+            "f9": 9,
+            "f10": 10,
+            "f11": 11,
+            "save": 11,
+            "f12": 12,
+            "cancel": 12,
+        }
+        return aliases.get(text.lower(), 0)
+
+    def mcp_tool_available(self, name: str) -> bool:
+        """Public wrapper used by deterministic macro execution."""
+        return self._mcp_tool_available(name)
+
+    def execute_macro_tool_call(self, session, tool_name: str, tool_args: dict, attach_screen: bool = True) -> dict:
+        """Execute one deterministic Macro action through MCP first, then legacy fallback."""
+        result = self._execute_primary_tool_call(session, tool_name, tool_args or {})
+        if result.get("requires_confirmation"):
+            confirm_tool_name = result.get("_legacy_tool_name") or result.get("action") or tool_name
+            confirm_tool_args = result.get("_legacy_tool_args") or (tool_args or {})
+            result = self._handle_confirmation(
+                session,
+                result,
+                confirm_tool_name,
+                confirm_tool_args,
+            )
+        if attach_screen:
+            return self._attach_screen_after_tool(session, result)
+        if result.get("backend") == "mcp":
+            action = result.get("action", "")
+            if action in MCP_FIELD_WRITE_TOOL_NAMES:
+                self._remember_mcp_field_writes(result)
+            if result.get("mcp_screen"):
+                self._remember_mcp_screen_info(result["mcp_screen"])
+        return result
+
+    def scan_macro_screen(self, session) -> dict:
+        """Scan screen for deterministic Macro validation, not for LLM context."""
+        started_at = time.perf_counter()
+        screen_tool = self._first_available_mcp_tool([
+            "sap_get_screen_info",
+            "sap_get_light_snapshot",
+            *MCP_SCREEN_TOOL_CANDIDATES,
+        ])
+        elements_tool = self._first_available_mcp_tool([
+            "sap_get_screen_elements",
+            *MCP_SCREEN_TOOL_CANDIDATES,
+        ])
+        if screen_tool and elements_tool:
+            try:
+                raw_screen = self._call_mcp_tool_text(screen_tool, {})
+                parsed_screen = self._parse_mcp_json_text(raw_screen)
+                screen = self._extract_screen_from_mcp_payload(parsed_screen) or parsed_screen
+                if not isinstance(screen, dict):
+                    screen = {}
+
+                active_window = str(screen.get("active_window") or "wnd[0]")
+                container_id = active_window if active_window.startswith("wnd[") else "wnd[0]"
+                fingerprint = self._mcp_screen_fingerprint(screen)
+                raw_elements = self._call_mcp_tool_text(elements_tool, {
+                    "container_id": container_id,
+                    "max_depth": SAP_MACRO_SCREEN_MAX_DEPTH,
+                    "type_filter": SAP_MACRO_SCREEN_TYPE_FILTER,
+                    "changeable_only": SAP_MACRO_SCREEN_CHANGEABLE_ONLY,
+                })
+                elements = self._mcp_elements_from_text(raw_elements)
+                if fingerprint:
+                    self._remember_mcp_screen_info(screen)
+                    self._remember_mcp_elements(
+                        fingerprint,
+                        container_id,
+                        raw_elements,
+                        max_depth=SAP_MACRO_SCREEN_MAX_DEPTH,
+                        type_filter=SAP_MACRO_SCREEN_TYPE_FILTER,
+                    )
+                self._timing_log("Macro MCP screen scan", started_at)
+                return {
+                    "success": True,
+                    "backend": "mcp",
+                    "screen": screen,
+                    "active_window": active_window,
+                    "container_id": container_id,
+                    "elements": elements,
+                    "raw_screen": raw_screen,
+                    "raw_elements": raw_elements,
+                }
+            except Exception as exc:
+                mcp_error = str(exc)
+        else:
+            mcp_error = "MCP screen/elements tool unavailable"
+
+        try:
+            screen_state = scan_sap_screen(session)
+            self._timing_log("Macro legacy screen scan", started_at)
+            return {
+                "success": True,
+                "backend": "legacy",
+                "screen": screen_state,
+                "active_window": screen_state.get("active_window", ""),
+                "elements": screen_state.get("elements", []),
+                "fields": screen_state.get("fields", []),
+                "active_popup": screen_state.get("active_popup"),
+                "mcp_error": mcp_error,
+            }
+        except Exception as exc:
+            return {
+                "success": False,
+                "backend": "macro_scan",
+                "error": f"MCP scan failed: {mcp_error}; legacy scan failed: {exc}",
+                "screen": {},
+                "elements": [],
+            }
 
     def _execute_tool_call(self, session, tool_name, tool_args):
         """

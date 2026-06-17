@@ -198,6 +198,18 @@ STUDY_WEB_SEARCH_ENABLED=false
 STUDY_WEB_SEARCH_MAX_RESULTS=5
 STUDY_WEB_SEARCH_TIMEOUT_SECONDS=8
 STUDY_WEB_SEARCH_CACHE_TTL_SECONDS=86400
+
+# Auto / Study Macro
+SAP_MACRO_DIR=macros
+SAP_MACRO_AUTOROUTE_ENABLED=true
+SAP_MACRO_AUTOROUTE_MIN_SCORE=70
+SAP_MACRO_STRICT_MATCH=true
+SAP_MACRO_REQUIRE_BOUNDARIES=true
+SAP_MACRO_SCREEN_MAX_DEPTH=5
+SAP_MACRO_SCREEN_TYPE_FILTER=GuiTextField,GuiCTextField,GuiPasswordField,GuiComboBox,GuiCheckBox,GuiRadioButton,GuiButton,GuiTab,GuiTableControl,GuiGridView,GuiShell,GuiLabel,GuiStatusbar,GuiOkCodeField
+SAP_MACRO_SCREEN_CHANGEABLE_ONLY=false
+SAP_MACRO_STEP_SCAN_RETRIES=5
+SAP_MACRO_STEP_SCAN_RETRY_SECONDS=0.4
 ```
 
 #### LLM Provider 與模型建議
@@ -353,6 +365,14 @@ Phase 3 已將 `sap_monitor.py` 改為 MCP-first polling：
 | `/study [名稱或目標]` | 優先執行指定 SOP / Skill；找不到時會建立 evidence pack 並進入受控探索草稿 |
 | `/study --draft [目標]` | 明確啟動探索草稿；效果等同未知 `/study [目標]`，但語意更清楚 |
 | `/study --save-draft [目標]` | 明確啟動探索草稿，完成後保存為 Markdown skill 草稿 |
+| `/macros` / `/macro list` | 列出 `macros/` 目錄中的結構化 Markdown Macro |
+| `/macro show <名稱>` | 顯示指定 Macro 的 inputs 與 steps |
+| `/macro run <名稱> key=value ...` | 以 Auto 路徑直接執行 Macro；優先 MCP，失敗時走 legacy fallback |
+| `/macro study <名稱> key=value ...` | 將同一份 Macro 轉成 Study Mode 互動式引導 |
+| `/macro learn recordings` | 掃描 `recordings/*.json`，把穩定欄位 ID 納入 Macro learned index |
+| `/macro audit <名稱>` | 顯示指定 Macro 的 primary ID、alternate IDs、learned IDs 與結果畫面 evidence |
+| `/macro doctor <名稱>` | 只掃描目前畫面並診斷各 step 是否可匹配，不執行 SAP 動作 |
+| `/study --macro <名稱> key=value ...` | 從 Study 指令直接啟動 Macro 引導 |
 | `/knowledge import <path-or-url>` | 匯入官方文件、公司 SOP、Markdown、PDF、HTML、DOCX 或網頁，建立 knowledge index |
 | `/knowledge search <query>` | 搜尋 knowledge / draft evidence |
 | `/knowledge distill <path-or-query>` | 依來源資料蒸餾成 `module > business_cycle > document` 階層 draft skill |
@@ -379,6 +399,133 @@ Study Mode 透過 `sap_skill_library.py` 讀取 `skills/` 與 `recordings/` 中�
 若 `/study [名稱]` 找不到既有 SOP / Skill，v0.11 起會先建立 evidence pack，再進入受控探索草稿。教練必須標示 module、business_cycle、來源、信心與未知項目；若 evidence 不足，第一步會先請使用者確認 T-Code 或流程方向，而不是直接把推測當成正式流程。低信心情境會先提出 2-3 個候選方向讓使用者選擇，不會同時要求輸入 T-Code 與業務欄位。
 
 若仍希望回到舊版「找不到 skill 就停止」的保守行為，可設定 `STUDY_REQUIRE_DRAFT_FLAG=true`，之後只有 `/study --draft [目標]` 或 `STUDY_ALLOW_DRAFT=true` 才會允許探索。草稿模式不會自動保存；若確定要把探索結果留作 skill，可使用 `/study --save-draft [目標]`，或在 `.env` 設定 `STUDY_SAVE_DRAFT_SKILL=true`。
+
+### Macro 系統
+
+Macro 是給 Auto / Study 共用的結構化操作描述，存放於 `macros/*.md`。它適合處理「GUI 元件 ID 已知、流程穩定、只有少數欄位值需要動態帶入」的操作，例如固定 T-Code、固定 checkbox/radio、固定按鈕，以及每次不同的物料號、單號、日期或公司代碼。
+
+Macro 與 Recording / Skill 的定位不同：
+
+- `/macro run` 會直接執行結構化步驟；不經過 LLM 重新決策，因此可減少掃描與 ReAct 輪數。
+- `/macro study` 或 `/study --macro` 只把 Macro 轉成 Study Mode 參考資料；教練仍只會引導使用者，不會替使用者寫入 SAP。
+- Auto Mode 收到自然語言時會先做 Macro pre-route：若 `SAP_MACRO_AUTOROUTE_ENABLED=true` 且匹配分數達 `SAP_MACRO_AUTOROUTE_MIN_SCORE`，會直接執行 Macro，不進入 ReAct；沒有高信心 Macro 才走原本 Auto agent。
+- Auto pre-route 命中的 Macro 若在尚未寫入欄位、按按鈕、勾選或選列前就因畫面驗證失敗，會自動退回原本 Auto ReAct。明確使用 `/macro run` 時則保留失敗結果，方便修正 Macro。
+- 固定值可直接寫在 `value`；動態值用 `{{變數名}}`，執行時用 `key=value` 提供，缺值時系統會提示輸入。
+- Auto 執行採 MCP-first。實際順序是「掃描目前畫面 → 完整匹配 Start / step 元件 → 輸入值或執行動作 → 驗證 End」。文字欄位會優先使用 `sap_set_batch_fields` / `sap_set_fields_and_enter` 批次化；若 MCP 不可用，才退回 legacy GUI COM。
+- Macro Markdown 必須有明確的 `## Start`、`## Steps`、`## End`。缺少 start/end 時，`/macro run` 會中止，避免在錯誤畫面直接操作。
+- `wnd[0]/tbar[0]/okcd` 是全域命令欄，部分 MCP/GUI 掃描不會回傳工具列元素；若 active window 仍是 `wnd[0]`，Macro 不會只因 start check 掃不到 okcd 就中止。`tcode` / `key` 這類不需要 element ID 的步驟也不會額外做 step element 掃描。
+- T-Code 切換後下一畫面尚未穩定時，Macro 會依 `SAP_MACRO_STEP_SCAN_RETRIES` / `SAP_MACRO_STEP_SCAN_RETRY_SECONDS` 重試 step target validation。
+- `## Steps` 可加上 `alternate_ids` 欄位，以 `;`、`,` 或換行分隔候選 SAP GUI ID；主要 ID 找不到時，Macro 會依候選 ID 與欄位 label 做二次定位，定位成功後用實際 ID 執行。
+- 若 `SAP_MACRO_LEARNING_ENABLED=true` 且 `SAP_MACRO_AUTO_WRITEBACK=true`，Macro 成功用替代 ID 執行後會自動更新該 macro 的 `alternate_ids`，並在 `macros/_backups/` 建立備份、在 `macros/_learned_index.json` 留 evidence。
+- 同一替代 ID 連續成功達 `SAP_MACRO_PROMOTE_PRIMARY_AFTER` 次後，才會提升為 primary `element_id`；一次成功只會先加入 alternate IDs。
+- 結果畫面 evidence 只記在 learned index，例如 MMBE screen 300 的 `IO_MATERIAL`，不會混入選擇畫面 step 的 `alternate_ids`。
+
+Macro Markdown 格式：
+
+```markdown
+---
+name: 查詢物料巨集
+description: 進入 MM03 並查詢指定物料
+mode: both
+tags: MM,MM03,物料
+---
+
+# Macro: 查詢物料巨集
+
+## Inputs
+| name | label | default | required | description |
+|---|---|---|---|---|
+| material | 物料號 |  | true | 本次要查詢的物料號 |
+| view_row | 檢視列索引 | 0 | false | MM03 選擇檢視彈窗的列索引 |
+
+## Start
+| condition | target | value | required | description |
+|---|---|---|---|---|
+| tcode |  | SESSION_MANAGER | true | 從起始畫面或可輸入 T-Code 的畫面開始 |
+| element | wnd[0]/tbar[0]/okcd |  | true | 必須能找到 T-Code 欄位 |
+
+## Steps
+| step | action | element_id | value | label | element_type | expected_label | description |
+|---|---|---|---|---|---|---|---|
+| 1 | tcode | wnd[0]/tbar[0]/okcd | MM03 | 進入 MM03 | GuiOkCodeField |  | 開啟顯示物料交易 |
+| 2 | input | wnd[0]/usr/ctxtRMMG1-MATNR | {{material}} | 物料 | GuiCTextField | 物料 | 輸入本次要查詢的物料號 |
+| 3 | key |  | Enter | 送出 |  |  | 驗證物料號 |
+| 4 | popup_table_confirm | wnd[1]/usr/tblSAPLMGMMTC_VIEW | {{view_row|default=0}} | 選擇檢視 | GuiTableControl |  | 選取檢視列並按繼續 |
+
+## End
+| condition | target | value | required | description |
+|---|---|---|---|---|
+| tcode |  | MM03 | true | 應停在 MM03 |
+| title_contains |  | 顯示物料 | false | 標題應能識別為顯示物料流程 |
+```
+
+`## Start` / `## End` 支援的常用 condition：
+
+| condition | 用途 |
+|---|---|
+| `tcode` | 比對目前交易碼 |
+| `screen_number` | 比對目前 Dynpro screen number |
+| `title` / `title_contains` | 比對畫面標題 |
+| `active_window` | 比對目前活動視窗，例如 `wnd[0]` / `wnd[1]` |
+| `element` | 確認指定 SAP GUI element ID 存在 |
+| `status_text` / `status_type` | 比對狀態列訊息 |
+
+`## Steps` 可加上 `element_type`、`expected_label`、`expected_text`、`expected_value` 等欄位。若設定了這些欄位，Macro 會在執行前掃描畫面並完整比對；比對失敗就停止，不會嘗試填值。
+
+清單型查詢建議把非必要欄位設成 `skip_if_empty=true`。當該欄位的 `{{變數}}` 本次沒有提供值時，Macro 會略過該 step，不會填空值，也不會因為該欄位目前不可見而中止。若要讓 Macro 自動送出查詢，可加一個 key step，例如 `value={{execute_key}}` 並設定 `skip_if_empty=true`；使用時傳 `execute_key=Execute` 才會執行。
+
+內建 Macro：
+
+| Macro | 用途 |
+|---|---|
+| `va05_list_orders` | VA05 銷售訂單清單 |
+| `va03_display_order` | VA03 顯示銷售訂單 |
+| `vf05_list_billing` | VF05 請款單清單 |
+| `mb51_material_docs` | MB51 物料憑證 |
+| `mb52_stock_list` | MB52 庫存清單 |
+| `mmbe_stock_overview` | MMBE 庫存總覽 |
+| `me2m_po_by_material` | ME2M 採購單清單 |
+
+Macro router 會先從自然語句抽取常見 SAP 代號，再決定是否直接執行 Macro：
+
+- 庫存：`顯示所有庫存`、`庫存清單` 會走 `mb52_stock_list`；`查看物料MAT_001的庫存` 會走 `mmbe_stock_overview`，並自動抽取 `material=MAT_001`。
+- 銷售訂單：`查看訂單500000001的情況`、`訂單號500000001查看情況`、`查看單號500000001的情況` 會走 `va03_display_order`，並自動抽取 `sales_order=500000001`；`訂單清單` 仍會走 `va05_list_orders`。
+- 請款與客戶：`查詢付款人C0001的請款文件` 會走 `vf05_list_billing`，並自動抽取 `payer=C0001`；`查詢買方C0001的銷售訂單清單` 會走 `va05_list_orders`，並自動抽取 `sold_to=C0001`。
+- 物料延伸查詢：`查詢物料MAT_001的採購單` 會走 `me2m_po_by_material`；`查詢物料MAT_001的物料憑證` 會走 `mb51_material_docs`。
+
+若文字只有一串數字且沒有「訂單/單號/請款/採購」等上下文，router 會保持保守，避免把不同類型的 SAP 文件號誤判成 VA03。若文字出現 `請購單號`、`採購單號`、`請款單號` 這類非銷售文件語境，也不會強行導到 VA03。
+
+支援的 `action`：
+
+| action | 用途 |
+|---|---|
+| `tcode` | 執行 T-Code，優先用 `sap_execute_transaction` |
+| `input` / `set_field` | 寫入一般文字欄位 |
+| `checkbox` | 勾選或取消 checkbox，`value=true/false` |
+| `radio` | 選取 radio button |
+| `combo` | 依 key 或顯示文字選擇下拉選單 |
+| `click` | 按下按鈕 |
+| `tab` | 切換頁籤 |
+| `key` | 送出 `Enter`、`Execute`、`Save`、`Back`、`Cancel` 或 F-key |
+| `popup` | 呼叫 `sap_handle_popup`，`value=confirm/cancel/auto/read` |
+| `table_row` | 依 row text 或 row index 選取表格列 |
+| `popup_table_confirm` | 選取彈窗表格列並確認，適用 MM03 選擇檢視類流程 |
+| `textedit` | 寫入多行文字 editor |
+| `focus` | 將游標定位到指定元件 |
+| `wait` | 等待指定秒數 |
+
+使用範例：
+
+```text
+/macros
+/macro show 查詢物料巨集
+/macro run 查詢物料巨集 material=MAT_001
+/macro study 查詢物料巨集 material=MAT_001
+/macro learn recordings
+/macro audit mmbe_stock_overview
+/macro doctor mmbe_stock_overview
+/study --macro 查詢物料巨集 material=MAT_001
+```
 
 ### Knowledge 與階層式 Skill 蒸餾
 
@@ -511,10 +658,12 @@ SAP_Copilot/
 ├── sap_monitor.py       # 背景 Polling 監控器
 ├── sap_recorder.py      # SOP 錄製管理器
 ├── sap_skill_library.py # Phase 3 SOP / Skill Library
+├── sap_macro_library.py # 結構化 Markdown Macro 解析與執行
 ├── sap_knowledge_library.py # Study evidence / knowledge / draft distillation
 ├── sap_login.py         # SAP GUI 自動登入腳本
 ├── plan.md              # 開發計劃藍圖
 ├── knowledge/           # 匯入文件、正規化文字與 knowledge index
+├── macros/              # Auto / Study 共用 Markdown Macro
 ├── skills/              # 整理後的穩定教學 Skill；_drafts/ 存放蒸餾草稿
 ├── recordings/          # SOP 錄製檔案 (JSON)
 └── .venv/               # Python 虛擬環境

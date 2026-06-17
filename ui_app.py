@@ -34,6 +34,7 @@ from sap_knowledge_library import SAPKnowledgeLibrary
 from sap_monitor import SAPMonitor
 from sap_recorder import SAPRecorder
 from sap_skill_library import SAPSkillLibrary
+from sap_macro_library import SAPMacroError, SAPMacroLibrary, macro_result_can_fallback_to_auto
 from sap_table_inspector import format_table_inspection, inspect_current_tables
 from mcp_client import get_default_sync_client
 
@@ -215,6 +216,7 @@ class SAPCopilotWorker(threading.Thread):
         self.monitor = None
         self.skill_library = None
         self.knowledge_library = None
+        self.macro_library = None
         self.ready = False
         self.study_context = ""
         self.prompt_counter = 0
@@ -293,6 +295,7 @@ class SAPCopilotWorker(threading.Thread):
             self.recorder = SAPRecorder()
             self.skill_library = SAPSkillLibrary()
             self.knowledge_library = SAPKnowledgeLibrary()
+            self.macro_library = SAPMacroLibrary()
             self.ready = True
             self.log(
                 "Connected: "
@@ -340,6 +343,8 @@ class SAPCopilotWorker(threading.Thread):
                 self._show_recordings()
             elif action == "study":
                 self._run_study(job.get("goal", ""))
+            elif action == "macro":
+                self._handle_macro_command(job.get("arg", ""))
             elif action == "play":
                 self._play(job.get("name", ""))
             else:
@@ -573,6 +578,10 @@ class SAPCopilotWorker(threading.Thread):
                 self.log("Usage: /study [SOP name] | /study --draft [goal] | /study --save-draft [goal]")
             else:
                 self._run_study(arg)
+        elif cmd == "/macros":
+            self._show_macros()
+        elif cmd == "/macro":
+            self._handle_macro_command(arg)
         elif cmd == "/knowledge":
             self._handle_knowledge_command(arg)
         elif cmd == "/skills":
@@ -580,7 +589,7 @@ class SAPCopilotWorker(threading.Thread):
         elif cmd == "/connect":
             self._connect(arg or None)
         else:
-            self.log("Available commands: /scan, /inspect table, /mcp, /record, /stop, /recordings, /play, /study, /knowledge, /skills, /ask, /solve, /auto, /connect, /reset")
+            self.log("Available commands: /scan, /inspect table, /mcp, /record, /stop, /recordings, /play, /study, /macro, /knowledge, /skills, /ask, /solve, /auto, /connect, /reset")
 
     def _parse_inline_options(self, text):
         options = {}
@@ -720,6 +729,8 @@ class SAPCopilotWorker(threading.Thread):
     def _process_message(self, text):
         self._ensure_ready()
         self.log(f"You: {text}")
+        if self._run_matched_macro(text):
+            return
         session = self._session()
         response = self.agent.process_message(
             session,
@@ -879,8 +890,172 @@ class SAPCopilotWorker(threading.Thread):
         self._ensure_ready()
         self.log(self.skill_library.get_recording_summary(name))
 
+    def _show_macros(self):
+        self._ensure_ready()
+        macros = self.macro_library.list_macros()
+        if not macros:
+            self.log("No macro found. Put structured Markdown macro files under macros/.")
+            return
+        lines = ["Macros:"]
+        for index, item in enumerate(macros, 1):
+            tags = ", ".join(item.get("tags") or [])
+            tag_text = f" | {tags}" if tags else ""
+            lines.append(
+                f"{index}. {item.get('name')} [{item.get('mode')}] "
+                f"inputs={item.get('input_count')} steps={item.get('step_count')}{tag_text}"
+            )
+            if item.get("description"):
+                lines.append(f"   {item.get('description')}")
+            lines.append(f"   {item.get('filepath')}")
+        self.log("\n".join(lines))
+
+    def _prompt_macro_input(self, item):
+        message = f"Macro input: {item.name}"
+        if item.label:
+            message += f"\n{item.label}"
+        if item.description:
+            message += f"\n{item.description}"
+        value = self._request_prompt(
+            "Macro Input",
+            message,
+            default=item.default or "",
+            prompt_type="text",
+        )
+        return str(value or item.default or "").strip()
+
+    def _macro_values(self, macro, values):
+        return self.macro_library.prompt_missing_inputs(
+            macro,
+            values,
+            prompt_callback=self._prompt_macro_input,
+        )
+
+    def _run_macro(self, arg):
+        self._ensure_ready()
+        name, values = self.macro_library.parse_values(arg)
+        if not name:
+            self.log("Usage: /macro run <macro-name> key=value ...")
+            return
+        macro = self.macro_library.load_macro(name)
+        if macro.mode == "study":
+            raise SAPMacroError("This macro is mode=study. Use /macro study or /study --macro instead of /macro run.")
+        runtime_values = self._macro_values(macro, values)
+        self.log(f"Macro Run: {macro.name}")
+        result = self.macro_library.execute_macro(
+            self._session(),
+            self.agent,
+            macro,
+            runtime_values,
+            log_callback=lambda text: self.log(f"  {text}"),
+        )
+        if result.get("success"):
+            self.log(f"Macro finished: {macro.name}")
+        else:
+            self.log(f"Macro finished with failed steps: {macro.name}")
+        return result
+
+    def _run_matched_macro(self, text):
+        if self.agent.mode != "auto":
+            return False
+        match = self.macro_library.match_request(text)
+        if not match:
+            return False
+        macro = match["macro"]
+        reasons = ", ".join(match.get("reasons") or [])
+        self.log(f"Macro matched: {macro.name} (score={match.get('score')}, reasons={reasons})")
+        self.log("Using Macro strict flow directly; skipping Auto ReAct iterations.")
+        if macro.mode == "study":
+            raise SAPMacroError("Matched macro is mode=study. Use /macro study or /study --macro.")
+        runtime_values = self._macro_values(macro, match.get("values") or {})
+        result = self.macro_library.execute_macro(
+            self._session(),
+            self.agent,
+            macro,
+            runtime_values,
+            log_callback=lambda line: self.log(f"  {line}"),
+        )
+        if result.get("success"):
+            self.log(f"Macro finished: {macro.name}")
+        else:
+            self.log(f"Macro finished with failed steps: {macro.name}")
+            if macro_result_can_fallback_to_auto(result):
+                self.log("Macro failed before field/button mutation; falling back to Auto ReAct.")
+                return False
+        return True
+
+    def _run_macro_study(self, arg):
+        self._ensure_ready()
+        name, values = self.macro_library.parse_values(arg)
+        if not name:
+            self.log("Usage: /macro study <macro-name> key=value ...")
+            return
+        macro = self.macro_library.load_macro(name)
+        runtime_values = self._macro_values(macro, values)
+        context = self.macro_library.format_study_context(macro, runtime_values)
+        self.log(f"Study Macro: {macro.name}")
+        if macro.mode == "auto":
+            self.log("Note: this macro is mode=auto; Study will use it only as guidance.")
+        self.agent.set_mode("study")
+        self.study_context = context
+        response = self.agent.process_message(
+            self._session(),
+            "Use the following Structured Macro to guide the user interactively from the first step.",
+            extra_context=context,
+        )
+        self.log(f"AI:\n{response}")
+        self.log("Study Mode remains active. Use Auto/Ask/Solve buttons or /auto to leave Study Mode.")
+
+    def _handle_macro_command(self, arg):
+        self._ensure_ready()
+        parts = str(arg or "").strip().split(maxsplit=1)
+        if not parts:
+            self.log("Usage: /macros | /macro show <name> | /macro run <name> key=value ... | /macro study <name> key=value ... | /macro learn recordings | /macro audit <name> | /macro doctor <name>")
+            return
+        subcommand = parts[0].lower()
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        try:
+            if subcommand in {"list", "ls"}:
+                self._show_macros()
+            elif subcommand == "show":
+                name, _values = self.macro_library.parse_values(rest)
+                if not name:
+                    self.log("Usage: /macro show <name>")
+                    return
+                self.log(self.macro_library.format_summary(self.macro_library.load_macro(name)))
+            elif subcommand == "run":
+                self._run_macro(rest)
+            elif subcommand == "study":
+                self._run_macro_study(rest)
+            elif subcommand == "learn":
+                target = rest or "recordings"
+                if target.lower() != "recordings":
+                    raise SAPMacroError("Only /macro learn recordings is supported.")
+                summary = self.macro_library.learn_from_recordings("recordings")
+                self.log("Macro Learn Recordings:\n" + json.dumps(summary, ensure_ascii=False, indent=2))
+            elif subcommand == "audit":
+                name, _values = self.macro_library.parse_values(rest)
+                if not name:
+                    self.log("Usage: /macro audit <name>")
+                    return
+                self.log(self.macro_library.audit_macro(name))
+            elif subcommand == "doctor":
+                name, _values = self.macro_library.parse_values(rest)
+                if not name:
+                    self.log("Usage: /macro doctor <name>")
+                    return
+                self.log(self.macro_library.doctor_macro(self._session(), self.agent, name))
+            else:
+                self._run_macro(arg)
+        except (FileNotFoundError, SAPMacroError) as exc:
+            self.log(f"Macro failed: {exc}")
+
     def _run_study(self, goal):
         self._ensure_ready()
+        raw_goal = str(goal or "").strip()
+        if raw_goal.lower().startswith(("--macro ", "/macro ")):
+            macro_arg = raw_goal.split(maxsplit=1)[1].strip() if len(raw_goal.split(maxsplit=1)) > 1 else ""
+            self._run_macro_study(macro_arg)
+            return
         goal, allow_draft_study, save_draft_skill = parse_study_request(goal)
         if not goal:
             self.log("Usage: /study [SOP name] | /study --draft [goal] | /study --save-draft [goal]")
@@ -1020,6 +1195,7 @@ class SAPCopilotUI:
         ttk.Button(actions, text="Record", command=self._record_dialog).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(actions, text="Stop", command=lambda: self.worker.submit("stop_record")).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(actions, text="SOP", command=lambda: self.worker.submit("recordings")).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(actions, text="Macro", command=self._macro_dialog).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Label(actions, textvariable=self.recording_var).pack(side=tk.RIGHT)
 
         self.output = ScrolledText(outer, wrap=tk.WORD, height=20, font=("Consolas", 10))
@@ -1034,7 +1210,7 @@ class SAPCopilotUI:
         self.input_text.bind("<Return>", self._return_key)
         ttk.Button(input_row, text="Send", command=self.send).pack(side=tk.LEFT, padx=(8, 0), fill=tk.Y)
 
-        self._append("UI ready. Use buttons or commands like /scan, /mcp, /ask, /solve, /recordings.\n")
+        self._append("UI ready. Use buttons or commands like /scan, /mcp, /ask, /solve, /recordings, /macro.\n")
 
     def _toggle_topmost(self):
         self.root.attributes("-topmost", bool(self.always_on_top_var.get()))
@@ -1054,6 +1230,15 @@ class SAPCopilotUI:
         goal = simpledialog.askstring("Study", "SOP name, or --draft goal:", parent=self.root)
         if goal:
             self.worker.submit("study", goal=goal.strip())
+
+    def _macro_dialog(self):
+        arg = simpledialog.askstring(
+            "Macro",
+            "list | show <name> | run <name> key=value ... | study <name> key=value ...:",
+            parent=self.root,
+        )
+        if arg:
+            self.worker.submit("macro", arg=arg.strip())
 
     def _connect_dialog(self):
         current = normalize_provider_name(os.getenv("LLM_PROVIDER", "github_copilot"))

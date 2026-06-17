@@ -15,6 +15,16 @@
 - 新增 `codex_auth.py`，專責讀取 `~/.codex/auth.json` 與觸發 Codex 瀏覽器登入；Codex CLI 只作為登入 helper，不作為模型推理連線。
 - CLI 新增 `/connect github_copilot` / `/connect codex`，可在執行中手動切換 LLM provider 並重建 agent；`/login` 在 Codex OAuth 模式下會觸發 `codex login` 瀏覽器登入。
 - `CODEX_OAUTH_LOGIN_ON_CONNECT=true` 時，Connect 會先讀取本機 OAuth 快取；若 token 不存在或過期才觸發 Codex OAuth 瀏覽器登入。
+- 新增 Auto / Study 共用的 Markdown Macro 系統：`sap_macro_library.py` 會讀取 `macros/*.md` 的 front matter、Inputs table 與 Steps table，支援 `{{variable}}` / `{{variable|default=value}}` 動態佔位符。
+- CLI 新增 `/macros`、`/macro list`、`/macro show`、`/macro run`、`/macro study`，並支援 `/study --macro`；UI 新增 Macro 按鈕與 `/macro` 指令。
+- Macro Auto 執行採 MCP-first，文字欄位可使用 `sap_set_batch_fields` / `sap_set_fields_and_enter` 批次化；MCP 不可用時退回 legacy GUI fallback。
+- Macro 執行新增嚴格驗證：Markdown 必須有 `## Start` / `## End`，執行流程改為「掃描畫面 → 完整匹配 Start/step 元件 → 輸入值 → 驗證 End」，避免在錯誤畫面套用固定 element ID。
+- 新增 Macro 驗證設定：`SAP_MACRO_STRICT_MATCH`、`SAP_MACRO_REQUIRE_BOUNDARIES`、`SAP_MACRO_SCREEN_MAX_DEPTH`、`SAP_MACRO_SCREEN_TYPE_FILTER`、`SAP_MACRO_SCREEN_CHANGEABLE_ONLY`。
+- 新增 Macro 自我修復與自動寫回：`SAP_MACRO_LEARNING_ENABLED` / `SAP_MACRO_AUTO_WRITEBACK` 開啟時，成功用替代 ID 執行後會更新 macro md 的 `alternate_ids`，並保存 `macros/_backups/` 與 `macros/_learned_index.json`。
+- 新增 Macro learning 設定：`SAP_MACRO_LEARNED_INDEX`、`SAP_MACRO_BACKUP_DIR`、`SAP_MACRO_RESOLVE_MIN_CONFIDENCE`、`SAP_MACRO_PROMOTE_PRIMARY_AFTER`。
+- 新增 `/macro learn recordings`、`/macro audit <name>`、`/macro doctor <name>`；UI `/macro` 指令同步支援。
+- 新增 7 個內建 Macro：`va05_list_orders`、`va03_display_order`、`vf05_list_billing`、`mb51_material_docs`、`mb52_stock_list`、`mmbe_stock_overview`、`me2m_po_by_material`。
+- 新增 Auto Mode Macro pre-router：自然語言會先以 `SAP_MACRO_AUTOROUTE_ENABLED` / `SAP_MACRO_AUTOROUTE_MIN_SCORE` 判斷是否直接執行 Macro；命中時跳過 LLM ReAct 迭代，未命中才回到 Auto agent。
 
 #### Changed
 - UI 的 **Connect** 按鈕改為 radio button 選單，可在 GitHub Copilot 與 Codex OAuth 間切換；Codex OAuth 頁面顯示 HTTP endpoint、token cache 與 model，不再要求 API key 或 command。
@@ -28,6 +38,16 @@
 - 修正 Codex backend 要求 streaming 的問題；Codex OAuth provider 現在以 `stream=true` 呼叫 Responses endpoint，並解析 SSE 事件後轉回既有 Chat Completions-like response。
 - 修正 Codex OAuth streaming parser 在 `requests.iter_lines()` 回傳 bytes 時拋出 `a bytes-like object is required, not 'str'` 的問題。
 - 修正 Codex OAuth streaming parser 收到空的 `response.completed` envelope 時覆蓋前面 `output_text.delta` / function-call item，導致 UI 顯示「AI 未回傳任何訊息」的問題。
+- 修正 Macro 欄位批次分組：`skip_if_empty=true` 的空白 key step 不再被誤判為 Enter validation，避免清單型 Macro 在未提供 `execute_key` 時仍自動送出查詢。
+- 修正 Macro strict flow 對 `wnd[0]/tbar[0]/okcd` 過度嚴格的問題：MCP/GUI 掃描未回傳工具列命令欄時，只要仍在主視窗 `wnd[0]`，start check 不再中止；`tcode` / `key` 步驟也不再做不必要的 element 掃描。
+- 修正 Auto pre-route 命中 Macro 但 Macro 在尚未寫入欄位/按鈕前驗證失敗時沒有 fallback 的問題；即使已完成 T-Code 導航，也會回到原本 Auto ReAct，避免使用者指令被 Macro 卡死。
+- 修正 T-Code 切換後下一畫面尚未穩定就驗證 step target 的問題；新增 `SAP_MACRO_STEP_SCAN_RETRIES` / `SAP_MACRO_STEP_SCAN_RETRY_SECONDS`，step target validation 會短暫重試。
+- 新增 Macro `alternate_ids` 支援：主要 SAP GUI ID 找不到時，會依候選 ID 與欄位 label 二次定位，定位成功後改用實際 ID 執行；`mmbe_stock_overview` 已補入常見 MMBE 物料/工廠/儲位/批次欄位候選。
+- 修正 Macro 無法利用工具結果 `screen_after.screen_elements` 的問題；導航/F8 後的 result screen evidence 現在會記入 learned index。
+- 修正 MMBE 已在結果畫面時仍回頭找選擇畫面欄位的問題；若 screen 300 的 `IO_MATERIAL` 已等於本次物料，Macro 直接判定已達成。
+- 改善 Macro router 的庫存語意判斷：`查看物料MAT_001的庫存` 會命中 `mmbe_stock_overview` 並抽取 `material=MAT_001`；`顯示所有庫存` / `庫存清單` 會命中 `mb52_stock_list`。
+- 改善 Macro router 的銷售訂單語意判斷：`查看訂單500000001的情況` 會命中 `va03_display_order` 並抽取 `sales_order=500000001`；`訂單清單` 仍會命中 `va05_list_orders`。
+- 改善 Macro router 對自然語句中夾帶代號的抽取：可從 `查看單號500000001的情況`、`查詢付款人C0001的請款文件`、`查詢買方C0001的銷售訂單清單`、`查詢物料MAT_001的採購單`、`查詢物料MAT_001的物料憑證` 直接推斷對應 Macro 與 runtime values；若語境是請購/採購/請款等非銷售文件，則不會把 generic 單號誤導到 VA03。
 
 ## [0.12.1] - 2026-06-16
 

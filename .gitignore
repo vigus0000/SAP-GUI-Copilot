@@ -6,3 +6,5 @@ diary.txt
 todo.txt
 external/mcp-sap-gui/
 tmp_openai_docs_cache/
+macros/_backups/
+macros/_learned_index.json
