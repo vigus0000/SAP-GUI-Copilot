@@ -1804,6 +1804,9 @@ class SAPMacroLibrary:
             if self._normalize_action(step.action) not in self.FIELD_ACTIONS:
                 break
             value, missing = _replace_placeholders(step.value, values, input_map)
+            if self._step_should_clear_empty_resolved(step, value, missing):
+                value = ""
+                missing = []
             if self._step_should_skip_resolved(step, value, missing):
                 index += 1
                 continue
@@ -1831,11 +1834,19 @@ class SAPMacroLibrary:
 
     @staticmethod
     def _step_should_skip_resolved(step: MacroStep, value: str, missing: list[str]) -> bool:
+        if SAPMacroLibrary._step_should_clear_empty_resolved(step, value, missing):
+            return False
         if not _parse_bool(step.options.get("skip_if_empty"), False):
             return False
         if missing:
             return True
         return str(value or "").strip() == ""
+
+    @staticmethod
+    def _step_should_clear_empty_resolved(step: MacroStep, value: str, missing: list[str]) -> bool:
+        if not _parse_bool(step.options.get("clear_if_empty") or step.options.get("clear_on_empty"), False):
+            return False
+        return bool(missing) or str(value or "").strip() == ""
 
     def _scan_macro_screen(self, session, agent) -> dict:
         if hasattr(agent, "scan_macro_screen"):

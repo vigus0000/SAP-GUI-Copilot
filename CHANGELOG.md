@@ -6,6 +6,23 @@
 
 ---
 
+## [0.13.1] - 2026-06-17
+
+#### Changed
+- 優化 Tkinter UI 視覺層級：header 顯示版本號、Connect 與 Top 控制移到頂部，狀態列改為更精簡的 Mode / SAP / Provider 顯示。
+- 對話紀錄改為 role-based 視覺格式，將使用者輸入、AI 回覆、系統訊息、Macro 訊息、錯誤與提示分別套用不同標籤、背景與縮排，避免長文字混在同一個 log 區塊。
+- 輸入區與送出按鈕改為更接近聊天介面的樣式，送出按鈕顯示 `發送 ↵`，提升 Auto / Ask / Solve / Study 對話可讀性。
+- Auto pre-route Macro 成功後新增 `SAP_MACRO_POST_REACT_VERIFY=true` 驗證層：Macro strict flow 結束前會交回 Auto ReAct 依目前 SAP 畫面與原始使用者目標確認是否真正完成，必要時補按 Execute/F8 或補足安全步驟。
+- UI 對話區改為純聊天紀錄格式，保留 `You:`、`AI:`、Mode 切換與 Connect 連線狀態；Macro、MCP、Scan 與其他流程 log 改輸出到啟動 UI 的終端機，避免非對話訊息污染聊天區。
+- Macro field step 新增 `clear_if_empty=true` 語意：空值時仍會寫入空白以清除 SAP selection screen 記憶值；`mb52_stock_list` 已套用於物料、工廠、儲位、物料類型、物料群組與批次篩選欄位。
+- Auto ReAct 新增 `AUTO_CLEAR_STALE_SELECTION_FIELDS=true` selection carryover guard：模型準備批次填欄時會合併本次未指定的殘留限制欄位清空；若直接按 Execute/F8/Enter，系統會先做 pre-clear，避免沿用上次查詢條件。
+
+#### Fixed
+- 修正 UI 長回覆只以單一純文字 log 呈現時，不易辨識 `You` / `AI` / 系統狀態來源的問題。
+- 修正 Macro 只滿足弱 `## End` 條件時可能半完成的問題，例如停在 MB52 選擇畫面卻已宣告完成。
+- 修正 MB52 查詢「工廠 1710 的所有庫存」時，未指定物料卻沿用 SAP 上次記憶的 `MAT_001`，造成查詢條件錯誤的問題。
+- 修正同類 selection screen 記憶值污染也可能發生在一般 Auto ReAct 路徑的問題，不再只依賴 Macro 的 `clear_if_empty`。
+
 ## [0.13.0] - 2026-06-17
 
 #### Added

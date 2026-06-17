@@ -85,7 +85,7 @@ aliases: 查看物料庫存,查物料庫存,顯示物料庫存,物料庫存,庫�
 
 動態值在 steps 中用 `{{input_name}}` 引用，例如 `{{material}}`。若要在步驟內設定 fallback，可用 `{{view_row|default=0}}`。
 
-可選輸入對應的 step 應設定 `skip_if_empty=true`。不要用空字串覆蓋 SAP 既有值。
+可選輸入對應的 step 應設定 `skip_if_empty=true`。若空值代表「不限制此條件」，且 SAP 選擇畫面可能保留上次查詢值，應再設定 `clear_if_empty=true`，讓 Macro 主動清空殘留條件。若欄位不可見或不應改動，才只使用 `skip_if_empty=true`。
 
 ## Start
 
@@ -124,12 +124,12 @@ aliases: 查看物料庫存,查物料庫存,顯示物料庫存,物料庫存,庫�
 
 ```md
 ## Steps
-| step | action | element_id | value | label | element_type | skip_if_empty | alternate_ids | expected_label | expected_text | expected_value | description |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | tcode | wnd[0]/tbar[0]/okcd | MMBE | 進入 MMBE | GuiOkCodeField | false |  |  |  |  | 開啟庫存總覽 |
-| 2 | input | wnd[0]/usr/ctxtMS_MATNR-LOW | {{material}} | 物料 | GuiCTextField | false | wnd[0]/usr/ctxtMATNR-LOW;wnd[0]/usr/ctxtS_MATNR-LOW |  |  |  | 填入物料 |
-| 3 | input | wnd[0]/usr/ctxtMS_WERKS-LOW | {{plant}} | 工廠 | GuiCTextField | true | wnd[0]/usr/ctxtWERKS-LOW |  |  |  | 填入工廠 |
-| 4 | key |  | {{execute_key}} | 執行 |  | true |  |  |  |  | 顯示結果 |
+| step | action | element_id | value | label | element_type | skip_if_empty | clear_if_empty | alternate_ids | expected_label | expected_text | expected_value | description |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | tcode | wnd[0]/tbar[0]/okcd | MMBE | 進入 MMBE | GuiOkCodeField | false | false |  |  |  |  | 開啟庫存總覽 |
+| 2 | input | wnd[0]/usr/ctxtMS_MATNR-LOW | {{material}} | 物料 | GuiCTextField | false | false | wnd[0]/usr/ctxtMATNR-LOW;wnd[0]/usr/ctxtS_MATNR-LOW |  |  |  | 填入物料 |
+| 3 | input | wnd[0]/usr/ctxtMS_WERKS-LOW | {{plant}} | 工廠 | GuiCTextField | true | true | wnd[0]/usr/ctxtWERKS-LOW |  |  |  | 填入工廠；未指定時清空殘留條件 |
+| 4 | key |  | {{execute_key}} | 執行 |  | true | false |  |  |  |  | 顯示結果 |
 ```
 
 欄位規則：
@@ -143,6 +143,7 @@ aliases: 查看物料庫存,查物料庫存,顯示物料庫存,物料庫存,庫�
 | `label` | 是 | 使用者可理解的欄位名，也是 self-healing 重要線索 |
 | `element_type` | 建議 | 例如 `GuiCTextField`、`GuiCheckBox`、`GuiRadioButton` |
 | `skip_if_empty` | 建議 | 可選欄位必須設為 `true` |
+| `clear_if_empty` | 否 | 空值時仍寫入空白以清除 SAP 記憶值；只用於空值代表不限制條件的選擇畫面欄位 |
 | `alternate_ids` | 否 | 以 `;` 分隔的候選 ID，只放同一畫面用途相同的欄位 |
 | `expected_label` | 否 | 執行前用於嚴格比對 label |
 | `expected_text` | 否 | 執行前用於嚴格比對 text |
@@ -256,7 +257,7 @@ SAP_MACRO_PROMOTE_PRIMARY_AFTER=3
 1. 先用 SAP GUI 手動操作一次，確認 T-Code、欄位、必要 popup 與結果畫面。
 2. 若可能，使用 `/record <流程名>` 錄製一份 recording。
 3. 新增 `macros/<name>.md`，只填已確認的 primary ID。
-4. 對可選欄位設定 `skip_if_empty=true`。
+4. 對可選欄位設定 `skip_if_empty=true`；若空值應清除上次查詢條件，另設 `clear_if_empty=true`。
 5. 執行 `/macro doctor <name>`，確認目前畫面可匹配哪些 step。
 6. 用 `/macro run <name> key=value ...` 在測試資料上執行。
 7. 成功後再測自然語言 Auto pre-route。
@@ -288,12 +289,12 @@ aliases: 常見說法1,常見說法2,T-CODE
 | element | wnd[0]/tbar[0]/okcd |  | true | 必須在 SAP 主視窗 |
 
 ## Steps
-| step | action | element_id | value | label | element_type | skip_if_empty | alternate_ids | expected_label | expected_text | expected_value | description |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | tcode | wnd[0]/tbar[0]/okcd | TCODE | 進入 TCODE | GuiOkCodeField | false |  |  |  |  | 開啟交易 |
-| 2 | input | wnd[0]/usr/ctxtFIELD-LOW | {{material}} | 物料 | GuiCTextField | true |  |  |  |  | 填入物料 |
-| 3 | input | wnd[0]/usr/ctxtWERKS-LOW | {{plant}} | 工廠 | GuiCTextField | true |  |  |  |  | 填入工廠 |
-| 4 | key |  | {{execute_key}} | 執行 |  | true |  |  |  |  | 若提供 Execute 則送出 |
+| step | action | element_id | value | label | element_type | skip_if_empty | clear_if_empty | alternate_ids | expected_label | expected_text | expected_value | description |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | tcode | wnd[0]/tbar[0]/okcd | TCODE | 進入 TCODE | GuiOkCodeField | false | false |  |  |  |  | 開啟交易 |
+| 2 | input | wnd[0]/usr/ctxtFIELD-LOW | {{material}} | 物料 | GuiCTextField | true | true |  |  |  |  | 填入物料；未指定時清空殘留條件 |
+| 3 | input | wnd[0]/usr/ctxtWERKS-LOW | {{plant}} | 工廠 | GuiCTextField | true | true |  |  |  |  | 填入工廠；未指定時清空殘留條件 |
+| 4 | key |  | {{execute_key}} | 執行 |  | true | false |  |  |  |  | 若提供 Execute 則送出 |
 
 ## End
 | condition | target | value | required | description |
@@ -311,6 +312,7 @@ aliases: 常見說法1,常見說法2,T-CODE
 - `step` 是連續整數。
 - `element_id` 使用 `wnd[0]/...` 或 `wnd[1]/...` short id。
 - 可選欄位都有 `skip_if_empty=true`。
+- 選擇畫面中空值代表不限制條件的欄位，應加 `clear_if_empty=true`，避免 SAP 記憶值殘留。
 - 動態值使用 `{{input_name}}`，不要把物料號、訂單號、日期硬寫死。
 - `label` 是使用者能理解的欄位名稱。
 - `alternate_ids` 只包含同畫面、同用途欄位。
@@ -321,7 +323,7 @@ aliases: 常見說法1,常見說法2,T-CODE
 
 - 把結果畫面欄位當成選擇畫面 input 欄位。
 - 將 `/app/con[0]/ses[0]/...` raw id 寫進 macro。
-- 沒有 `skip_if_empty=true`，導致空白值覆蓋 SAP 預設值。
+- 該清空的查詢欄位只有 `skip_if_empty=true`，導致 SAP 沿用上次查詢值。
 - `aliases` 太少，Auto pre-route 無法命中。
 - `aliases` 太泛，例如只寫「查詢」，導致錯誤命中。
 - 對未驗證欄位硬加 guessed `alternate_ids`。

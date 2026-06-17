@@ -13,6 +13,7 @@ LLM Agent 大腦
 
 import json
 import os
+import re
 import time
 
 try:
@@ -110,6 +111,7 @@ MCP_EXPOSE_DISCOVERY_TO_LLM = env_enabled("MCP_EXPOSE_DISCOVERY_TO_LLM", "false"
 MCP_POPUP_USE_POPUP_TOOL_ONLY = env_enabled("MCP_POPUP_USE_POPUP_TOOL_ONLY", "true")
 MCP_ATTACH_ELEMENTS_AFTER_NAV = env_enabled("MCP_ATTACH_ELEMENTS_AFTER_NAV", "true")
 MCP_ATTACH_ELEMENTS_ON_FIELD_FAILURE = env_enabled("MCP_ATTACH_ELEMENTS_ON_FIELD_FAILURE", "true")
+AUTO_CLEAR_STALE_SELECTION_FIELDS = env_enabled("AUTO_CLEAR_STALE_SELECTION_FIELDS", "true")
 MCP_READ_TABLES_IN_CONTEXT = env_enabled("MCP_READ_TABLES_IN_CONTEXT", "true")
 MCP_READ_SHELLS_IN_CONTEXT = env_enabled("MCP_READ_SHELLS_IN_CONTEXT", "true")
 MCP_TABLE_CONTEXT_MAX_TABLES = int(os.getenv("MCP_TABLE_CONTEXT_MAX_TABLES", "3"))
@@ -289,6 +291,8 @@ SYSTEM_PROMPT_AUTO = """你是一個專業的 SAP GUI 操作助手。你可以�
 - 處理彈窗時優先使用 handle_popup；例如填寫彈窗「標題」後按儲存，使用 handle_popup(action="save", field_label="標題", value="...")
 - 如果 active_popup 的 title 是「錯誤」或 messages 有錯誤文字，先讀 messages 判斷原因；通常要先 handle_popup(action="ok") 關閉最上層錯誤，再依下一層彈窗的 fields 補齊空白/焦點欄位
 - screen JSON 中的 fields 會把欄位 label 與元件 ID 配對；填欄位時優先使用 fields 裡的 id 或 handle_popup(field_label=...)
+- SAP 選擇畫面常會保留上次查詢條件。執行清單/查詢/庫存/報表前，必須比對目前非空欄位值與使用者本次需求；若欄位值沒有被使用者指定且會限制結果，必須用空字串清空該欄位，再按 Enter/F8/Execute。例如使用者說「查詢工廠 1710 的所有庫存」，畫面物料欄位仍有 `MAT_001`，必須同時清空物料欄位並填入工廠 `1710`，不能沿用 `MAT_001`。
+- 同一選擇畫面要填入條件並清空殘留條件時，優先用批次欄位工具一次送出，例如 `sap_set_batch_fields(fields={物料欄位: "", 工廠欄位: "1710"}, validate=false)`；不要只填使用者提到的欄位。
 - 如果 fields 的 type 是 GuiComboBox、dropdown=true 或含 options，代表下拉式選單；必須使用 select_combo，或在彈窗中用 handle_popup 依 label 選值，不要把它當一般文字欄位 set_text
 - 下拉式選單若有 options，優先用 option key；沒有 key 時才用顯示文字
 - 使用 MCP 工具時，如果有 sap_set_fields_and_enter，且同一畫面要填欄位後按 Enter 驗證，優先一次呼叫 sap_set_fields_and_enter(fields={id: value, ...})；不要拆成 sap_set_batch_fields + sap_send_key
@@ -783,6 +787,366 @@ class SAPAgent:
                             elements.extend(self._mcp_elements_from_text(text))
                 return elements
         return []
+
+    @staticmethod
+    def _short_sap_element_id(element_id):
+        text = str(element_id or "").strip()
+        if not text:
+            return ""
+        match = re.search(r"(wnd\[\d+\].*)$", text)
+        if match:
+            return match.group(1)
+        return text
+
+    @staticmethod
+    def _truthy_value(value):
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    @staticmethod
+    def _selection_field_semantic(blob):
+        text = str(blob or "").lower()
+        patterns = (
+            ("material", ("matnr", "material", "物料", "料號", "商品")),
+            ("plant", ("werks", "plant", "工廠", "廠別")),
+            ("storage_location", ("lgort", "storage", "stor", "儲位", "庫存地點", "倉庫")),
+            ("batch", ("charg", "batch", "批次")),
+            ("material_type", ("mtart", "material type", "物料類型")),
+            ("material_group", ("matkl", "wgb", "material group", "物料群組", "物料組")),
+            ("customer", ("kunnr", "kunde", "customer", "payer", "付款人", "客戶")),
+            ("vendor", ("lifnr", "vendor", "supplier", "供應商", "廠商")),
+            ("company_code", ("bukrs", "company code", "公司代碼")),
+            ("sales_org", ("vkorg", "sales org", "銷售組織")),
+            ("distribution_channel", ("vtweg", "distribution", "配銷通路", "分銷通路")),
+            ("division", ("spart", "division", "部門")),
+            ("purchasing_org", ("ekorg", "purchasing org", "採購組織")),
+            ("purchasing_group", ("ekgrp", "purchasing group", "採購群組", "採購組")),
+            ("movement_type", ("bwart", "movement type", "移動類型", "異動類型")),
+            ("document", ("banfn", "ebeln", "vbeln", "belnr", "請購單", "採購單", "銷售訂單", "請款", "文件號")),
+            ("date", ("datum", "date", "fkdat", "budat", "erdat", "eindt", "日期", "交貨日", "文件日期")),
+        )
+        for semantic, needles in patterns:
+            if any(needle in text for needle in needles):
+                return semantic
+        return ""
+
+    @staticmethod
+    def _selection_semantic_allows_clear(semantic, user_message):
+        if semantic == "date":
+            return any(token in str(user_message or "").lower() for token in (
+                "all",
+                "any",
+                "不限",
+                "不限制",
+                "全部",
+                "所有",
+                "清空日期",
+                "不限定日期",
+            ))
+        return semantic in {
+            "material",
+            "plant",
+            "storage_location",
+            "batch",
+            "material_type",
+            "material_group",
+            "customer",
+            "vendor",
+            "company_code",
+            "sales_org",
+            "distribution_channel",
+            "division",
+            "purchasing_org",
+            "purchasing_group",
+            "movement_type",
+            "document",
+        }
+
+    @staticmethod
+    def _selection_semantic_mentioned(semantic, user_message):
+        text = str(user_message or "").lower()
+        keywords = {
+            "material": ("material", "物料", "料號", "商品"),
+            "plant": ("plant", "工廠", "廠別"),
+            "storage_location": ("storage", "stor", "儲位", "庫存地點", "倉庫"),
+            "batch": ("batch", "批次"),
+            "material_type": ("物料類型", "material type"),
+            "material_group": ("物料群組", "物料組", "material group"),
+            "customer": ("customer", "payer", "付款人", "客戶"),
+            "vendor": ("vendor", "supplier", "供應商", "廠商"),
+            "company_code": ("company code", "公司代碼"),
+            "sales_org": ("sales org", "銷售組織"),
+            "distribution_channel": ("distribution", "配銷通路", "分銷通路"),
+            "division": ("division", "部門"),
+            "purchasing_org": ("purchasing org", "採購組織"),
+            "purchasing_group": ("purchasing group", "採購群組", "採購組"),
+            "movement_type": ("movement type", "移動類型", "異動類型"),
+            "document": ("請購單", "採購單", "銷售訂單", "請款", "文件號", "單號"),
+            "date": ("date", "日期", "交貨日", "文件日期"),
+        }
+        return any(keyword in text for keyword in keywords.get(semantic, ()))
+
+    def _selection_field_from_element(self, element):
+        if not isinstance(element, dict):
+            return None
+
+        element_id = self._short_sap_element_id(
+            element.get("id")
+            or element.get("element_id")
+            or element.get("field_id")
+            or element.get("Id")
+        )
+        if not element_id:
+            return None
+
+        element_type = str(element.get("type") or element.get("Type") or "").strip()
+        if element_type and not any(token in element_type for token in (
+            "TextField",
+            "CTextField",
+            "ComboBox",
+            "OkCodeField",
+        )):
+            return None
+
+        if "changeable" in element and not self._truthy_value(element.get("changeable")):
+            return None
+        if "visible" in element and not self._truthy_value(element.get("visible")):
+            return None
+
+        value = element.get("value")
+        if value in (None, ""):
+            value = element.get("text")
+        value_text = str(value or "").strip()
+        if not value_text or value_text.lower() in {"true", "false", "none", "null"}:
+            return None
+
+        label = str(
+            element.get("label")
+            or element.get("name")
+            or element.get("Name")
+            or element.get("tooltip")
+            or element.get("text_label")
+            or ""
+        ).strip()
+        name = str(element.get("name") or element.get("Name") or "").strip()
+        blob = " ".join([
+            element_id,
+            element_type,
+            name,
+            label,
+            str(element.get("tooltip") or ""),
+        ])
+        semantic = self._selection_field_semantic(blob)
+        if not semantic:
+            return None
+
+        return {
+            "id": element_id,
+            "type": element_type,
+            "name": name,
+            "label": label or name or element_id,
+            "value": value_text,
+            "semantic": semantic,
+        }
+
+    def _selection_fields_from_payload(self, payload):
+        fields = []
+        seen = set()
+
+        def visit(value, depth=0):
+            if depth > 7:
+                return
+            if isinstance(value, dict):
+                field = self._selection_field_from_element(value)
+                if field and field["id"] not in seen:
+                    seen.add(field["id"])
+                    fields.append(field)
+                for child_key in ("elements", "fields", "items", "children", "data", "result", "content"):
+                    child = value.get(child_key)
+                    if child is not None:
+                        visit(child, depth + 1)
+            elif isinstance(value, list):
+                for item in value:
+                    visit(item, depth + 1)
+
+        visit(payload)
+        return fields
+
+    def _auto_selection_carryover_guard(self, screen_text, user_message):
+        if not AUTO_CLEAR_STALE_SELECTION_FIELDS:
+            return "", {}, {}
+
+        candidates = []
+        seen = set()
+        for title, body in self._mcp_context_sections(screen_text):
+            parsed = self._parse_mcp_json_text(body)
+            for field in self._selection_fields_from_payload(parsed):
+                if field["id"] not in seen:
+                    seen.add(field["id"])
+                    candidates.append(field)
+            if "screen_elements" in title or "fast filtered" in title:
+                for element in self._mcp_elements_from_text(body):
+                    field = self._selection_field_from_element(element)
+                    if field and field["id"] not in seen:
+                        seen.add(field["id"])
+                        candidates.append(field)
+
+        if not candidates:
+            parsed = self._parse_mcp_json_text(screen_text)
+            for field in self._selection_fields_from_payload(parsed):
+                if field["id"] not in seen:
+                    seen.add(field["id"])
+                    candidates.append(field)
+
+        if not candidates:
+            return "", {}, {}
+
+        user_upper = str(user_message or "").upper()
+        stale = []
+        clear_fields = {}
+        required_rewrites = {}
+        for field in candidates:
+            value = field["value"]
+            if value and str(value).upper() in user_upper:
+                continue
+            semantic = field["semantic"]
+            mentioned = self._selection_semantic_mentioned(semantic, user_message)
+            can_clear = self._selection_semantic_allows_clear(semantic, user_message)
+            item = dict(field)
+            item["requires_rewrite"] = bool(mentioned)
+            item["auto_clear"] = bool(can_clear and not mentioned)
+            stale.append(item)
+            if mentioned:
+                required_rewrites[field["id"]] = item
+            elif can_clear and field["id"] not in clear_fields:
+                clear_fields[field["id"]] = ""
+
+        if not stale:
+            return "", {}, {}
+
+        lines = [
+            "## Auto Selection Carryover Guard",
+            "目前畫面有非空選擇條件沒有出現在本次使用者需求中。這些可能是 SAP 保留的上次查詢條件；執行查詢前需確認是否清空，避免沿用舊限制造成結果錯誤。",
+            "可自動清空的欄位請在本輪批次填欄位時一併設為空字串；若即將按 Execute/F8/Enter，系統也會先嘗試自動 pre-clear。",
+            "`must-rewrite` 代表使用者本次提到該類條件但畫面值不同，必須先填成本次值，不能直接清空後送出。",
+        ]
+        for field in stale[:12]:
+            if field.get("requires_rewrite"):
+                marker = "must-rewrite"
+            else:
+                marker = "auto-clear" if field.get("auto_clear") else "review-only"
+            lines.append(
+                f"- {marker}: {field['label']} ({field['id']}) = {field['value']} [{field['semantic']}]"
+            )
+        return "\n".join(lines), clear_fields, required_rewrites
+
+    @staticmethod
+    def _normalize_tool_name(name):
+        return str(name or "").strip()
+
+    def _tool_field_write_ids(self, tool_name, tool_args):
+        name = self._normalize_tool_name(tool_name)
+        args = tool_args if isinstance(tool_args, dict) else {}
+        ids = set()
+        if name in {"sap_set_batch_fields", "sap_set_fields_and_enter"}:
+            fields = args.get("fields")
+            if isinstance(fields, dict):
+                ids.update(
+                    self._short_sap_element_id(field_id)
+                    for field_id in fields.keys()
+                    if self._short_sap_element_id(field_id)
+                )
+        elif name in {"sap_set_field", "set_text", "sap_enter_text", "sap_set_text"}:
+            field_id = (
+                args.get("field_id")
+                or args.get("element_id")
+                or args.get("id")
+            )
+            short_id = self._short_sap_element_id(field_id)
+            if short_id:
+                ids.add(short_id)
+        elif name in {"sap_select_combobox_entry", "sap_select_checkbox", "sap_select_radio_button", "select_combo", "set_checkbox"}:
+            field_id = (
+                args.get("element_id")
+                or args.get("field_id")
+                or args.get("combobox_id")
+                or args.get("checkbox_id")
+                or args.get("radio_id")
+                or args.get("id")
+            )
+            short_id = self._short_sap_element_id(field_id)
+            if short_id:
+                ids.add(short_id)
+        return ids
+
+    def _apply_auto_selection_clears_to_tool_args(self, tool_name, tool_args, clear_fields, required_rewrites=None):
+        if not clear_fields and not required_rewrites:
+            return tool_args
+        args = dict(tool_args or {})
+        written_ids = self._tool_field_write_ids(tool_name, args)
+        for field_id in list(clear_fields.keys()):
+            if self._short_sap_element_id(field_id) in written_ids:
+                clear_fields.pop(field_id, None)
+        if isinstance(required_rewrites, dict):
+            for field_id in list(required_rewrites.keys()):
+                if self._short_sap_element_id(field_id) in written_ids:
+                    required_rewrites.pop(field_id, None)
+
+        if self._normalize_tool_name(tool_name) not in {"sap_set_batch_fields", "sap_set_fields_and_enter"}:
+            return args
+
+        fields = dict(args.get("fields") or {})
+        existing_ids = {
+            self._short_sap_element_id(field_id)
+            for field_id in fields.keys()
+        }
+        for field_id, value in list(clear_fields.items()):
+            short_id = self._short_sap_element_id(field_id)
+            if short_id and short_id not in existing_ids:
+                fields[field_id] = value
+            clear_fields.pop(field_id, None)
+
+        args["fields"] = fields
+        if self._normalize_tool_name(tool_name) == "sap_set_batch_fields":
+            args.setdefault("validate", False)
+        args.setdefault("skip_readonly", True)
+        return args
+
+    def _tool_is_query_submit(self, tool_name, tool_args):
+        name = self._normalize_tool_name(tool_name)
+        args = tool_args if isinstance(tool_args, dict) else {}
+        if name in {"sap_send_key", "sap_send_vkey", "send_vkey"}:
+            key = args.get("key", args.get("vkey", ""))
+            key_text = str(key).strip().lower()
+            return key_text in {"0", "8", "enter", "f8", "execute"}
+        if name in {"sap_press_button", "sap_click_button", "click", "confirmed_click"}:
+            blob = json.dumps(args, ensure_ascii=False).lower()
+            return any(token in blob for token in ("execute", "執行", "btn[8]", "/8", "f8"))
+        return False
+
+    def _run_auto_selection_preclear(self, session, clear_fields):
+        if not clear_fields:
+            return None
+        if not self._mcp_tool_available("sap_set_batch_fields"):
+            return {
+                "success": False,
+                "action": "auto_selection_preclear",
+                "error": "sap_set_batch_fields unavailable",
+                "fields": dict(clear_fields),
+            }
+        fields = dict(clear_fields)
+        clear_fields.clear()
+        result = self._execute_primary_tool_call(session, "sap_set_batch_fields", {
+            "fields": fields,
+            "validate": False,
+            "skip_readonly": True,
+        })
+        if result.get("backend") == "mcp":
+            self._remember_mcp_field_writes(result)
+        return result
 
     def _mcp_context_sections(self, text):
         sections = []
@@ -2687,6 +3051,10 @@ class SAPAgent:
         screen_text, screen_backend = self._screen_context_text(session, purpose="auto")
         tool_schemas = self._tool_schemas_for_auto(screen_text)
         tool_backend = "mcp" if tool_schemas != TOOL_SCHEMAS else "legacy"
+        carryover_guard_text, auto_clear_fields, auto_rewrite_fields = self._auto_selection_carryover_guard(
+            screen_text,
+            user_message,
+        )
 
         # 組合訊息：畫面狀態 + 使用者指令
         combined_message = (
@@ -2695,6 +3063,8 @@ class SAPAgent:
             f"## 工具來源\n{tool_backend}\n\n"
             f"## 使用者指令\n{user_message}"
         )
+        if carryover_guard_text:
+            combined_message = f"{combined_message}\n\n{carryover_guard_text}"
 
         # 加入對話歷史
         self._trim_conversation_history()
@@ -2755,7 +3125,47 @@ class SAPAgent:
 
                 interrupted = False
                 try:
+                    tool_args = self._apply_auto_selection_clears_to_tool_args(
+                        tool_name,
+                        tool_args,
+                        auto_clear_fields,
+                        auto_rewrite_fields,
+                    )
+                    auto_preclear_result = None
+                    if auto_rewrite_fields and self._tool_is_query_submit(tool_name, tool_args):
+                        rewrite_labels = [
+                            f"{item.get('label') or field_id} ({field_id}) = {item.get('value')}"
+                            for field_id, item in auto_rewrite_fields.items()
+                        ]
+                        tool_result = {
+                            "success": False,
+                            "action": tool_name,
+                            "error": (
+                                "Auto Selection Carryover Guard blocked query submit because "
+                                "some stale fields are mentioned in the current request but still "
+                                "have old values. Update those fields before Execute/F8/Enter."
+                            ),
+                            "_tool_args": tool_args,
+                            "stale_fields_requiring_rewrite": rewrite_labels,
+                        }
+                        tool_result = self._attach_screen_after_tool(session, tool_result)
+                        raise RuntimeError("__AUTO_PRECLEAR_BLOCKED__")
+                    if auto_clear_fields and self._tool_is_query_submit(tool_name, tool_args):
+                        auto_preclear_result = self._run_auto_selection_preclear(session, auto_clear_fields)
+                        if auto_preclear_result and not auto_preclear_result.get("success", False):
+                            tool_result = {
+                                "success": False,
+                                "action": tool_name,
+                                "error": "Auto Selection Carryover Guard pre-clear failed; query submit was blocked to avoid stale filters.",
+                                "_tool_args": tool_args,
+                                "auto_preclear": auto_preclear_result,
+                            }
+                            tool_result = self._attach_screen_after_tool(session, tool_result)
+                            raise RuntimeError("__AUTO_PRECLEAR_BLOCKED__")
+
                     tool_result = self._execute_primary_tool_call(session, tool_name, tool_args)
+                    if auto_preclear_result:
+                        tool_result["auto_preclear"] = auto_preclear_result
 
                     if tool_result.get("requires_confirmation"):
                         confirm_tool_name = tool_result.get("_legacy_tool_name") or tool_result.get("action") or tool_name
@@ -2772,6 +3182,13 @@ class SAPAgent:
                         "action": tool_name,
                         "error": "使用者中斷工具執行",
                     }
+                except RuntimeError as e:
+                    if str(e) != "__AUTO_PRECLEAR_BLOCKED__":
+                        tool_result = {
+                            "success": False,
+                            "action": tool_name,
+                            "error": f"工具執行例外: {e}",
+                        }
                 except Exception as e:
                     tool_result = {
                         "success": False,

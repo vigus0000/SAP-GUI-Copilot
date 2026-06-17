@@ -25,16 +25,16 @@ aliases: 顯示所有庫存,庫存清單,查詢庫存清單,列出庫存,所有�
 | element | wnd[0]/tbar[0]/okcd |  | true | 必須能找到 T-Code 欄位 |
 
 ## Steps
-| step | action | element_id | value | label | element_type | skip_if_empty | description |
-|---|---|---|---|---|---|---|---|
-| 1 | tcode | wnd[0]/tbar[0]/okcd | MB52 | 進入 MB52 | GuiOkCodeField | false | 開啟庫存清單 |
-| 2 | input | wnd[0]/usr/ctxtMATNR-LOW | {{material}} | 物料 | GuiCTextField | true | 填入物料 |
-| 3 | input | wnd[0]/usr/ctxtWERKS-LOW | {{plant}} | 工廠 | GuiCTextField | true | 填入工廠 |
-| 4 | input | wnd[0]/usr/ctxtLGORT-LOW | {{storage_location}} | 儲位 | GuiCTextField | true | 填入儲位 |
-| 5 | input | wnd[0]/usr/ctxtMTART-LOW | {{material_type}} | 物料類型 | GuiCTextField | true | 填入物料類型 |
-| 6 | input | wnd[0]/usr/ctxtMATKL-LOW | {{material_group}} | 物料群組 | GuiCTextField | true | 填入物料群組 |
-| 7 | input | wnd[0]/usr/ctxtCHARG-LOW | {{batch}} | 批次 | GuiCTextField | true | 填入批次 |
-| 8 | key |  | {{execute_key}} | 執行 |  | true | 若提供 Execute 則送出查詢 |
+| step | action | element_id | value | label | element_type | skip_if_empty | clear_if_empty | description |
+|---|---|---|---|---|---|---|---|---|
+| 1 | tcode | wnd[0]/tbar[0]/okcd | MB52 | 進入 MB52 | GuiOkCodeField | false | false | 開啟庫存清單 |
+| 2 | input | wnd[0]/usr/ctxtMATNR-LOW | {{material}} | 物料 | GuiCTextField | true | true | 填入物料；未指定時清空以避免沿用 SAP 記憶值 |
+| 3 | input | wnd[0]/usr/ctxtWERKS-LOW | {{plant}} | 工廠 | GuiCTextField | true | true | 填入工廠；未指定時清空以避免沿用 SAP 記憶值 |
+| 4 | input | wnd[0]/usr/ctxtLGORT-LOW | {{storage_location}} | 儲位 | GuiCTextField | true | true | 填入儲位；未指定時清空以避免沿用 SAP 記憶值 |
+| 5 | input | wnd[0]/usr/ctxtMTART-LOW | {{material_type}} | 物料類型 | GuiCTextField | true | true | 填入物料類型；未指定時清空以避免沿用 SAP 記憶值 |
+| 6 | input | wnd[0]/usr/ctxtMATKL-LOW | {{material_group}} | 物料群組 | GuiCTextField | true | true | 填入物料群組；未指定時清空以避免沿用 SAP 記憶值 |
+| 7 | input | wnd[0]/usr/ctxtCHARG-LOW | {{batch}} | 批次 | GuiCTextField | true | true | 填入批次；未指定時清空以避免沿用 SAP 記憶值 |
+| 8 | key |  | {{execute_key}} | 執行 |  | true | false | 若提供 Execute 則送出查詢 |
 
 ## End
 | condition | target | value | required | description |

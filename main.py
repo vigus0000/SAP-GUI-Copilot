@@ -124,7 +124,7 @@ def print_banner():
     print(f"""
 {Colors.CYAN}╔══════════════════════════════════════════════════╗
 ║                                                  ║
-║   🤖 SAP GUI Copilot  V0.13.0 (Stage 2)         ║
+║   🤖 SAP GUI Copilot  V0.13.1 (Stage 2)         ║
 ║   ─────────────────────────────────────────────   ║
 ║   用自然語言操作 SAP，告別繁瑣的 T-Code！        ║
 ║                                                  ║
@@ -557,7 +557,7 @@ def start_macro_study(agent, sap, macro_library, macro_name, values):
     print(f"{Colors.CYAN}  📘 Study Mode 仍保持啟用；輸入 /auto、/ask 或 /solve 可切換模式。{Colors.RESET}\n")
 
 
-def run_macro(agent, sap, macro_library, macro_name, values):
+def run_macro(agent, sap, macro_library, macro_name, values, announce_completion=True):
     macro = macro_library.load_macro(macro_name)
     if macro.mode == "study":
         raise SAPMacroError("此 Macro 標記為 mode=study，不能用 /macro run 直接操作；請改用 /macro study 或 /study --macro")
@@ -572,11 +572,48 @@ def run_macro(agent, sap, macro_library, macro_name, values):
         runtime_values,
         log_callback=lambda text: print(f"{Colors.DIM}  {text}{Colors.RESET}"),
     )
-    if result.get("success"):
-        print(f"{Colors.GREEN}  ✅ Macro 執行完成: {macro.name}{Colors.RESET}\n")
+    result["runtime_values"] = runtime_values
+    if announce_completion:
+        if result.get("success"):
+            print(f"{Colors.GREEN}  ✅ Macro 執行完成: {macro.name}{Colors.RESET}\n")
+        else:
+            print(f"{Colors.RED}  ❌ Macro 執行完成但有失敗步驟: {macro.name}{Colors.RESET}\n")
     else:
-        print(f"{Colors.RED}  ❌ Macro 執行完成但有失敗步驟: {macro.name}{Colors.RESET}\n")
+        if result.get("success"):
+            print(f"{Colors.GREEN}  Macro strict flow 已結束: {macro.name}{Colors.RESET}")
+        else:
+            print(f"{Colors.RED}  Macro strict flow 有失敗步驟: {macro.name}{Colors.RESET}")
     return result
+
+
+def macro_post_react_verify(agent, sap, macro, runtime_values, user_input, result):
+    if not env_enabled("SAP_MACRO_POST_REACT_VERIFY", "true"):
+        return ""
+    summary = {
+        "macro": macro.name,
+        "runtime_values": runtime_values,
+        "macro_success": bool(result.get("success")),
+        "failed_step": result.get("failed_step"),
+        "step_count": result.get("step_count"),
+    }
+    prompt = (
+        "Macro strict flow has just finished. Before declaring the task complete, "
+        "perform one Auto ReAct verification against the current live SAP screen.\n\n"
+        "Rules:\n"
+        "1. Treat the current SAP screen as the source of truth.\n"
+        "2. Original user goal must be satisfied, not only the macro End condition.\n"
+        "3. If the screen is still a selection/input screen and the user asked to query/list/display results, "
+        "execute the safe next action such as Enter/F8/Execute when appropriate.\n"
+        "4. Do not restart the same T-Code or re-fill fields that already match unless the screen clearly shows incorrect values.\n"
+        "5. If the goal is already satisfied, answer briefly with the visible result/state.\n"
+        "6. If more information is needed, ask one concise follow-up question.\n\n"
+        f"Original user goal:\n{user_input}\n\n"
+        f"Macro summary:\n{json.dumps(summary, ensure_ascii=False)}"
+    )
+    print(f"{Colors.DIM}  Macro post-check: running Auto ReAct verification before final completion.{Colors.RESET}")
+    response = agent.process_message(sap.get_session(), prompt)
+    print(f"\n{Colors.MAGENTA}  AI > {Colors.RESET}{response}\n")
+    return response
 
 
 def try_run_matched_macro(agent, sap, macro_library, user_input):
@@ -592,10 +629,13 @@ def try_run_matched_macro(agent, sap, macro_library, user_input):
         f"(score={match.get('score')}, reasons={reasons}){Colors.RESET}"
     )
     print(f"{Colors.DIM}     將直接走 Macro 嚴格流程；不進入 ReAct 迭代。{Colors.RESET}")
-    result = run_macro(agent, sap, macro_library, macro.name, match.get("values") or {})
+    result = run_macro(agent, sap, macro_library, macro.name, match.get("values") or {}, announce_completion=False)
     if macro_result_can_fallback_to_auto(result):
         print(f"{Colors.YELLOW}  Macro 在尚未寫入欄位/按鈕前失敗，改回 Auto ReAct fallback。{Colors.RESET}\n")
         return False
+    if result.get("success"):
+        runtime_values = result.get("runtime_values") or match.get("values") or {}
+        macro_post_react_verify(agent, sap, macro, runtime_values, user_input, result)
     return True
 
 

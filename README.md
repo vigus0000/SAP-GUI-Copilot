@@ -156,6 +156,7 @@ MCP_EXPOSE_DISCOVERY_TO_LLM=false
 MCP_POPUP_USE_POPUP_TOOL_ONLY=true
 MCP_ATTACH_ELEMENTS_AFTER_NAV=true
 MCP_ATTACH_ELEMENTS_ON_FIELD_FAILURE=true
+AUTO_CLEAR_STALE_SELECTION_FIELDS=true
 MCP_READ_TABLES_IN_CONTEXT=true
 MCP_READ_SHELLS_IN_CONTEXT=true
 MCP_TABLE_CONTEXT_MAX_TABLES=3
@@ -203,6 +204,7 @@ STUDY_WEB_SEARCH_CACHE_TTL_SECONDS=86400
 SAP_MACRO_DIR=macros
 SAP_MACRO_AUTOROUTE_ENABLED=true
 SAP_MACRO_AUTOROUTE_MIN_SCORE=70
+SAP_MACRO_POST_REACT_VERIFY=true
 SAP_MACRO_STRICT_MATCH=true
 SAP_MACRO_REQUIRE_BOUNDARIES=true
 SAP_MACRO_SCREEN_MAX_DEPTH=5
@@ -304,6 +306,7 @@ Phase 2.1 新增 MCP speed mode：
 - `sap_select_popup_table_row_and_confirm` 將彈窗 table row selection 與確認合併，適合 MM03 選擇檢視等流程
 - `MCP_ATTACH_ELEMENTS_AFTER_NAV=true` 時，交易切換、畫面跳轉或 Enter 後的 screen change 會自動附上 filtered elements，避免下一輪猜欄位 ID
 - `MCP_ATTACH_ELEMENTS_ON_FIELD_FAILURE=true` 時，欄位寫入失敗會自動讀一次 filtered elements 並放入 `field_write_recovery`，讓下一輪直接用正確 ID 重試
+- `AUTO_CLEAR_STALE_SELECTION_FIELDS=true` 時，Auto ReAct 會在查詢送出前檢查 SAP selection screen 是否保留本次需求未指定的舊篩選值；對物料、工廠、儲位、批次、客戶、採購/銷售組織等典型限制欄位，會在批次填欄或 Execute/F8 前先清空，避免查詢被上次條件污染。
 - `MCP_SAP_FAST_MODE=true` 時，初始畫面只抓 `sap_get_screen_info` 與 filtered `sap_get_screen_elements`
 - `MCP_READ_TABLES_IN_CONTEXT=true` 時，Agent 會優先用 MCP 的 `sap_read_table` 讀取目前畫面中的 `GuiGridView` / `GuiTableControl` / ALV 報表，並把壓縮後的 `mcp_table_report_context` 放入 Ask / Solve / Study / Auto 的畫面 context
 - `MCP_TABLE_CONTEXT_MAX_TABLES`、`MCP_TABLE_CONTEXT_MAX_ROWS`、`MCP_TABLE_CONTEXT_MAX_COLUMNS` 控制自動附上的表格數、列數與資料列欄數；大型報表只會附上前幾列，需要更多資料時再由 Agent 分頁呼叫 `sap_read_table(start_row=...)`
@@ -409,6 +412,7 @@ Macro 與 Recording / Skill 的定位不同：
 - `/macro run` 會直接執行結構化步驟；不經過 LLM 重新決策，因此可減少掃描與 ReAct 輪數。
 - `/macro study` 或 `/study --macro` 只把 Macro 轉成 Study Mode 參考資料；教練仍只會引導使用者，不會替使用者寫入 SAP。
 - Auto Mode 收到自然語言時會先做 Macro pre-route：若 `SAP_MACRO_AUTOROUTE_ENABLED=true` 且匹配分數達 `SAP_MACRO_AUTOROUTE_MIN_SCORE`，會直接執行 Macro，不進入 ReAct；沒有高信心 Macro 才走原本 Auto agent。
+- Auto pre-route 的 Macro 成功後，預設仍會依 `SAP_MACRO_POST_REACT_VERIFY=true` 交回 Auto ReAct 做一次目標完成度驗證；若畫面仍停在選擇畫面但使用者要求查詢/清單/顯示結果，Agent 可補按 Execute/F8 或補足安全步驟，避免只滿足弱 End 條件就宣告完成。
 - Auto pre-route 命中的 Macro 若在尚未寫入欄位、按按鈕、勾選或選列前就因畫面驗證失敗，會自動退回原本 Auto ReAct。明確使用 `/macro run` 時則保留失敗結果，方便修正 Macro。
 - 固定值可直接寫在 `value`；動態值用 `{{變數名}}`，執行時用 `key=value` 提供，缺值時系統會提示輸入。
 - Auto 執行採 MCP-first。實際順序是「掃描目前畫面 → 完整匹配 Start / step 元件 → 輸入值或執行動作 → 驗證 End」。文字欄位會優先使用 `sap_set_batch_fields` / `sap_set_fields_and_enter` 批次化；若 MCP 不可用，才退回 legacy GUI COM。
@@ -472,7 +476,7 @@ tags: MM,MM03,物料
 
 `## Steps` 可加上 `element_type`、`expected_label`、`expected_text`、`expected_value` 等欄位。若設定了這些欄位，Macro 會在執行前掃描畫面並完整比對；比對失敗就停止，不會嘗試填值。
 
-清單型查詢建議把非必要欄位設成 `skip_if_empty=true`。當該欄位的 `{{變數}}` 本次沒有提供值時，Macro 會略過該 step，不會填空值，也不會因為該欄位目前不可見而中止。若要讓 Macro 自動送出查詢，可加一個 key step，例如 `value={{execute_key}}` 並設定 `skip_if_empty=true`；使用時傳 `execute_key=Execute` 才會執行。
+清單型查詢建議把非必要欄位設成 `skip_if_empty=true`。當該欄位的 `{{變數}}` 本次沒有提供值時，Macro 預設會略過該 step，不會填空值，也不會因為該欄位目前不可見而中止。若 SAP 選擇畫面會記住上次查詢值，且空值代表「不限制此條件」，應再加 `clear_if_empty=true`，讓 Macro 主動清空殘留條件，例如 MB52 查「工廠 1710 的所有庫存」時必須清空物料欄位。若要讓 Macro 自動送出查詢，可加一個 key step，例如 `value={{execute_key}}` 並設定 `skip_if_empty=true`；使用時傳 `execute_key=Execute` 才會執行。
 
 內建 Macro：
 

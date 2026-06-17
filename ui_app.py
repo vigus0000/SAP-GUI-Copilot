@@ -39,7 +39,23 @@ from sap_table_inspector import format_table_inspection, inspect_current_tables
 from mcp_client import get_default_sync_client
 
 
-APP_VERSION = "0.13.0"
+APP_VERSION = "0.13.1"
+
+UI_COLORS = {
+    "bg": "#f4efe7",
+    "panel": "#f9f6f0",
+    "surface": "#ebe4d8",
+    "border": "#d2c7b7",
+    "text": "#2c231a",
+    "muted": "#8a7a6b",
+    "accent": "#c73900",
+    "user": "#0d47a1",
+    "ai": "#087a39",
+    "system": "#6b5947",
+    "warning": "#a15c00",
+    "error": "#b00020",
+    "macro": "#5b2bbf",
+}
 
 MODE_LABELS = {
     "auto": "Auto",
@@ -230,7 +246,25 @@ class SAPCopilotWorker(threading.Thread):
         self.outbound_queue.put({"kind": kind, "payload": payload})
 
     def log(self, text):
-        self.emit("log", text)
+        if self._is_dialog_log(text) or self._is_ui_status_log(text):
+            self.emit("dialog_log", text)
+        else:
+            self.emit("terminal_log", text)
+
+    @staticmethod
+    def _is_dialog_log(text):
+        stripped = str(text or "").strip()
+        return stripped.startswith("You:") or stripped.startswith("AI:") or stripped.startswith("AI:\n")
+
+    @staticmethod
+    def _is_ui_status_log(text):
+        stripped = str(text or "").strip()
+        return (
+            stripped.startswith("Mode switched")
+            or (stripped.startswith("Initializing ") and "SAP connection" in stripped)
+            or stripped.startswith("Connected:")
+            or stripped.startswith("Connection failed:")
+        )
 
     def emit_state(self):
         state = {
@@ -948,11 +982,47 @@ class SAPCopilotWorker(threading.Thread):
             runtime_values,
             log_callback=lambda text: self.log(f"  {text}"),
         )
+        result["runtime_values"] = runtime_values
         if result.get("success"):
             self.log(f"Macro finished: {macro.name}")
         else:
             self.log(f"Macro finished with failed steps: {macro.name}")
         return result
+
+    @staticmethod
+    def _macro_post_verify_prompt(user_goal, macro, runtime_values, result):
+        summary = {
+            "macro": macro.name,
+            "runtime_values": runtime_values,
+            "macro_success": bool(result.get("success")),
+            "failed_step": result.get("failed_step"),
+            "step_count": result.get("step_count"),
+        }
+        return (
+            "Macro strict flow has just finished. Before declaring the task complete, "
+            "perform one Auto ReAct verification against the current live SAP screen.\n\n"
+            "Rules:\n"
+            "1. Treat the current SAP screen as the source of truth.\n"
+            "2. Original user goal must be satisfied, not only the macro End condition.\n"
+            "3. If the screen is still a selection/input screen and the user asked to query/list/display results, "
+            "execute the safe next action such as Enter/F8/Execute when appropriate.\n"
+            "4. Do not restart the same T-Code or re-fill fields that already match unless the screen clearly shows incorrect values.\n"
+            "5. If the goal is already satisfied, answer briefly with the visible result/state.\n"
+            "6. If more information is needed, ask one concise follow-up question.\n\n"
+            f"Original user goal:\n{user_goal}\n\n"
+            f"Macro summary:\n{json.dumps(summary, ensure_ascii=False)}"
+        )
+
+    def _run_macro_post_react_check(self, text, macro, runtime_values, result):
+        if not env_enabled("SAP_MACRO_POST_REACT_VERIFY", "true"):
+            return ""
+        self.log("Macro post-check: running Auto ReAct verification before final completion.")
+        response = self.agent.process_message(
+            self._session(),
+            self._macro_post_verify_prompt(text, macro, runtime_values, result),
+        )
+        self.log(f"AI:\n{response}")
+        return response
 
     def _run_matched_macro(self, text):
         if self.agent.mode != "auto":
@@ -974,8 +1044,10 @@ class SAPCopilotWorker(threading.Thread):
             runtime_values,
             log_callback=lambda line: self.log(f"  {line}"),
         )
+        result["runtime_values"] = runtime_values
         if result.get("success"):
-            self.log(f"Macro finished: {macro.name}")
+            self.log(f"Macro strict flow finished: {macro.name}")
+            self._run_macro_post_react_check(text, macro, runtime_values, result)
         else:
             self.log(f"Macro finished with failed steps: {macro.name}")
             if macro_result_can_fallback_to_auto(result):
@@ -1156,61 +1228,106 @@ class SAPCopilotUI:
         self.root.after(100, self._poll_worker)
 
     def _build_widgets(self):
-        outer = ttk.Frame(self.root, padding=10)
+        self.root.configure(bg=UI_COLORS["bg"])
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure("App.TFrame", background=UI_COLORS["bg"])
+        style.configure("Panel.TFrame", background=UI_COLORS["panel"])
+        style.configure("App.TLabel", background=UI_COLORS["bg"], foreground=UI_COLORS["text"])
+        style.configure("Panel.TLabel", background=UI_COLORS["panel"], foreground=UI_COLORS["text"])
+        style.configure("Title.TLabel", background=UI_COLORS["bg"], foreground=UI_COLORS["accent"], font=("Segoe UI", 14, "bold"))
+        style.configure("Version.TLabel", background=UI_COLORS["bg"], foreground=UI_COLORS["muted"], font=("Segoe UI", 8))
+        style.configure("Status.TLabel", background=UI_COLORS["panel"], foreground=UI_COLORS["system"], font=("Segoe UI", 9))
+        style.configure("Mode.TLabel", background=UI_COLORS["panel"], foreground=UI_COLORS["macro"], font=("Segoe UI", 9, "bold"))
+        style.configure("App.TButton", background=UI_COLORS["surface"], foreground=UI_COLORS["text"], padding=(10, 5))
+        style.configure("Primary.TButton", background="#cf3d00", foreground="#ffffff", padding=(14, 8))
+        style.map("Primary.TButton", background=[("active", "#a83200")], foreground=[("active", "#ffffff")])
+
+        outer = ttk.Frame(self.root, padding=10, style="App.TFrame")
         outer.pack(fill=tk.BOTH, expand=True)
 
-        header = ttk.Frame(outer)
+        header = ttk.Frame(outer, style="App.TFrame")
         header.pack(fill=tk.X)
-        ttk.Label(header, text="SAP GUI Copilot", font=("Segoe UI", 14, "bold")).pack(side=tk.LEFT)
+        ttk.Label(header, text="SAP GUI Copilot", style="Title.TLabel").pack(side=tk.LEFT)
+        ttk.Label(header, text=f"v{APP_VERSION}", style="Version.TLabel").pack(side=tk.LEFT, padx=(8, 0), pady=(4, 0))
         ttk.Checkbutton(
             header,
             text="Top",
             variable=self.always_on_top_var,
             command=self._toggle_topmost,
-        ).pack(side=tk.RIGHT)
+        ).pack(side=tk.RIGHT, padx=(8, 0))
+        ttk.Button(header, text="Connect", style="App.TButton", command=self._connect_dialog).pack(side=tk.RIGHT)
 
-        status = ttk.Frame(outer)
+        status = ttk.Frame(outer, padding=(10, 8), style="Panel.TFrame")
         status.pack(fill=tk.X, pady=(8, 8))
-        ttk.Label(status, textvariable=self.mode_var, width=14).pack(side=tk.LEFT)
-        ttk.Label(status, textvariable=self.sap_var).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Label(status, textvariable=self.model_var).pack(side=tk.RIGHT)
+        ttk.Label(status, textvariable=self.mode_var, width=14, style="Mode.TLabel").pack(side=tk.LEFT)
+        ttk.Label(status, textvariable=self.sap_var, style="Status.TLabel").pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Label(status, textvariable=self.model_var, style="Status.TLabel").pack(side=tk.RIGHT)
 
-        modes = ttk.Frame(outer)
+        modes = ttk.Frame(outer, style="App.TFrame")
         modes.pack(fill=tk.X, pady=(0, 8))
         for mode in ("auto", "ask", "solve"):
             ttk.Button(
                 modes,
                 text=MODE_LABELS[mode],
+                style="App.TButton",
                 command=lambda item=mode: self.worker.submit("set_mode", mode=item),
             ).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(modes, text="Study", command=self._study_dialog).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(modes, text="Connect", command=self._connect_dialog).pack(side=tk.RIGHT)
+        ttk.Button(modes, text="Study", style="App.TButton", command=self._study_dialog).pack(side=tk.LEFT, padx=(0, 6))
 
-        actions = ttk.Frame(outer)
+        actions = ttk.Frame(outer, style="App.TFrame")
         actions.pack(fill=tk.X, pady=(0, 8))
-        ttk.Button(actions, text="Scan", command=lambda: self.worker.submit("scan")).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(actions, text="Inspect", command=lambda: self.worker.submit("inspect_table")).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(actions, text="MCP", command=lambda: self.worker.submit("mcp_probe")).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(actions, text="Reset", command=lambda: self.worker.submit("reset")).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(actions, text="Record", command=self._record_dialog).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(actions, text="Stop", command=lambda: self.worker.submit("stop_record")).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(actions, text="SOP", command=lambda: self.worker.submit("recordings")).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(actions, text="Macro", command=self._macro_dialog).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Label(actions, textvariable=self.recording_var).pack(side=tk.RIGHT)
+        ttk.Button(actions, text="Scan", style="App.TButton", command=lambda: self.worker.submit("scan")).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(actions, text="Inspect", style="App.TButton", command=lambda: self.worker.submit("inspect_table")).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(actions, text="MCP", style="App.TButton", command=lambda: self.worker.submit("mcp_probe")).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(actions, text="Reset", style="App.TButton", command=lambda: self.worker.submit("reset")).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(actions, text="Record", style="App.TButton", command=self._record_dialog).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(actions, text="Stop", style="App.TButton", command=lambda: self.worker.submit("stop_record")).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(actions, text="SOP", style="App.TButton", command=lambda: self.worker.submit("recordings")).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(actions, text="Macro", style="App.TButton", command=self._macro_dialog).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(actions, textvariable=self.recording_var, style="App.TLabel").pack(side=tk.RIGHT)
 
-        self.output = ScrolledText(outer, wrap=tk.WORD, height=20, font=("Consolas", 10))
+        self.output = ScrolledText(
+            outer,
+            wrap=tk.WORD,
+            height=20,
+            font=("Segoe UI", 10),
+            bg=UI_COLORS["panel"],
+            fg=UI_COLORS["text"],
+            insertbackground=UI_COLORS["text"],
+            relief=tk.SOLID,
+            bd=1,
+            padx=10,
+            pady=8,
+        )
         self.output.pack(fill=tk.BOTH, expand=True)
         self.output.configure(state=tk.DISABLED)
+        self._configure_output_tags()
 
-        input_row = ttk.Frame(outer)
+        input_row = ttk.Frame(outer, style="App.TFrame")
         input_row.pack(fill=tk.X, pady=(8, 0))
-        self.input_text = tk.Text(input_row, height=3, wrap=tk.WORD, font=("Segoe UI", 10))
+        self.input_text = tk.Text(
+            input_row,
+            height=3,
+            wrap=tk.WORD,
+            font=("Segoe UI", 10),
+            bg="#fffdf8",
+            fg=UI_COLORS["text"],
+            insertbackground=UI_COLORS["text"],
+            relief=tk.SOLID,
+            bd=1,
+            padx=8,
+            pady=6,
+        )
         self.input_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.input_text.bind("<Control-Return>", lambda _event: self.send())
         self.input_text.bind("<Return>", self._return_key)
-        ttk.Button(input_row, text="Send", command=self.send).pack(side=tk.LEFT, padx=(8, 0), fill=tk.Y)
+        ttk.Button(input_row, text="發送 ↵", style="Primary.TButton", command=self.send).pack(side=tk.LEFT, padx=(8, 0), fill=tk.Y)
 
-        self._append("UI ready. Use buttons or commands like /scan, /mcp, /ask, /solve, /recordings, /macro.\n")
+        self._print_terminal_log("UI ready. Use buttons or commands like /scan, /mcp, /ask, /solve, /recordings, /macro.")
 
     def _toggle_topmost(self):
         self.root.attributes("-topmost", bool(self.always_on_top_var.get()))
@@ -1365,12 +1482,69 @@ class SAPCopilotUI:
         self.input_text.delete("1.0", tk.END)
         self.worker.submit("send", text=text)
 
+    def _configure_output_tags(self):
+        self.output.tag_configure("time", foreground="#b7a891", font=("Segoe UI", 8))
+        self.output.tag_configure("user_label", foreground=UI_COLORS["user"], font=("Segoe UI", 10, "bold"))
+        self.output.tag_configure("ai_label", foreground=UI_COLORS["ai"], font=("Segoe UI", 10, "bold"))
+        self.output.tag_configure("system_label", foreground=UI_COLORS["system"], font=("Segoe UI", 9, "bold"))
+        self.output.tag_configure("body", foreground=UI_COLORS["text"], font=("Segoe UI", 10), lmargin1=12, lmargin2=12, rmargin=14)
+        self.output.tag_configure("user_body", foreground="#0d47a1", font=("Segoe UI", 10, "bold"), lmargin1=12, lmargin2=12, rmargin=14)
+        self.output.tag_configure(
+            "system_body",
+            foreground=UI_COLORS["system"],
+            font=("Segoe UI", 9),
+            lmargin1=12,
+            lmargin2=12,
+            rmargin=14,
+            spacing3=5,
+        )
+        self.output.tag_configure(
+            "ai_body",
+            foreground=UI_COLORS["text"],
+            font=("Segoe UI", 10),
+            lmargin1=12,
+            lmargin2=12,
+            rmargin=14,
+            spacing3=6,
+        )
+
+    @staticmethod
+    def _classify_log_entry(text):
+        stripped = str(text or "").strip()
+        if stripped.startswith("You:"):
+            return "user", stripped[4:].strip()
+        if stripped.startswith("AI:\n"):
+            return "ai", stripped[3:].lstrip()
+        if stripped.startswith("AI:"):
+            return "ai", stripped[3:].strip()
+        if SAPCopilotWorker._is_ui_status_log(stripped):
+            return "system", stripped
+        return "terminal", stripped
+
     def _append(self, text):
         timestamp = time.strftime("%H:%M:%S")
+        role, body = self._classify_log_entry(text)
+        if role not in {"user", "ai", "system"}:
+            self._print_terminal_log(text)
+            return
         self.output.configure(state=tk.NORMAL)
-        self.output.insert(tk.END, f"[{timestamp}] {text.rstrip()}\n\n")
+        self.output.insert(tk.END, f"[{timestamp}] ", ("time",))
+        if role == "user":
+            self.output.insert(tk.END, "You: ", ("user_label",))
+            self.output.insert(tk.END, (body or "").rstrip() + "\n\n", ("user_body",))
+        elif role == "system":
+            self.output.insert(tk.END, "System: ", ("system_label",))
+            self.output.insert(tk.END, (body or "").rstrip() + "\n\n", ("system_body",))
+        else:
+            self.output.insert(tk.END, "AI:\n", ("ai_label",))
+            self.output.insert(tk.END, (body or "(AI 未回傳任何訊息)").rstrip() + "\n\n", ("ai_body",))
         self.output.see(tk.END)
         self.output.configure(state=tk.DISABLED)
+
+    @staticmethod
+    def _print_terminal_log(text):
+        timestamp = time.strftime("%H:%M:%S")
+        print(f"[{timestamp}] {str(text or '').rstrip()}", flush=True)
 
     def _poll_worker(self):
         while True:
@@ -1380,8 +1554,12 @@ class SAPCopilotUI:
                 break
             kind = item.get("kind")
             payload = item.get("payload")
-            if kind == "log":
+            if kind == "dialog_log":
                 self._append(str(payload))
+            elif kind == "terminal_log":
+                self._print_terminal_log(payload)
+            elif kind == "log":
+                self._print_terminal_log(payload)
             elif kind == "state":
                 self._apply_state(payload or {})
             elif kind == "prompt":
@@ -1409,13 +1587,14 @@ class SAPCopilotUI:
     def _apply_state(self, state):
         mode = state.get("mode", "auto")
         ready = "ready" if state.get("ready") else "not connected"
-        self.mode_var.set(f"Mode: {MODE_LABELS.get(mode, mode)}")
+        self.mode_var.set(f"● {MODE_LABELS.get(mode, mode)} Mode")
         tcode = state.get("tcode") or "-"
         user = state.get("user") or "-"
         client = state.get("client") or "-"
-        self.sap_var.set(f"SAP: {ready} | {tcode} | {client}/{user}")
+        status_mark = "✓" if state.get("ready") else "!"
+        self.sap_var.set(f"{status_mark} {ready}  {tcode}  {client}/{user}")
         provider = provider_display_name(state.get("provider") or "github_copilot")
-        self.model_var.set(f"Model: {provider} / {state.get('model') or '-'}")
+        self.model_var.set(f"{provider} / {state.get('model') or '-'}")
         recording = state.get("recording") or ""
         self.recording_var.set(f"REC: {recording}" if recording else "")
 
