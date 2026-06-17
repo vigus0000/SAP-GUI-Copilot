@@ -1,11 +1,10 @@
 """
-LLM Agent 大腦 — GitHub Copilot 版
+LLM Agent 大腦
 
-透過 GitHub Copilot API (api.githubcopilot.com) 進行意圖識別與 Tool Calling。
+透過可切換的 LLM provider 進行意圖識別與 Tool Calling。
 實作 ReAct Loop: Scan → Think → Act → Verify
 
-注意：Copilot API 相容 OpenAI Chat Completions 格式，但回應可能有差異，
-需要額外的錯誤處理。
+目前支援 GitHub Copilot 與 Codex/OpenAI-compatible Chat Completions。
 
 架構解耦：
 - LLM 呼叫邏輯與 SAP Tools 完全分離
@@ -15,7 +14,6 @@ LLM Agent 大腦 — GitHub Copilot 版
 import json
 import os
 import time
-import requests
 
 try:
     import dotenv
@@ -24,6 +22,11 @@ except Exception:
     pass
 
 from copilot_auth import CopilotAuth
+from llm_provider import (
+    default_model_for_provider,
+    create_llm_provider,
+    normalize_provider_name,
+)
 from sap_agent_tools import (
     scan_sap_screen,
     read_editor_text,
@@ -48,19 +51,12 @@ def env_list(name, default):
 STUDY_ALLOWED_TOOLS = {"guide_user_action", "visualize_element"}
 STUDY_TOOL_SCHEMAS = [s for s in TOOL_SCHEMAS if s.get("function", {}).get("name") in STUDY_ALLOWED_TOOLS]
 
-# GitHub Copilot Chat Completions API
-COPILOT_CHAT_URL = "https://api.githubcopilot.com/chat/completions"
-
-# 預設模型。可用 .env 的 COPILOT_MODEL 覆寫；不要再硬寫已退場的 gpt-4o。
-DEFAULT_MODEL = os.getenv("COPILOT_MODEL", "gpt-5-mini")
+DEFAULT_LLM_PROVIDER = normalize_provider_name(os.getenv("LLM_PROVIDER", "github_copilot"))
+DEFAULT_MODEL = default_model_for_provider(DEFAULT_LLM_PROVIDER)
 
 # 最大 ReAct 迴圈次數（防止無限迴圈）
 MAX_ITERATIONS = int(os.getenv("COPILOT_MAX_ITERATIONS", "6"))
 
-# Copilot API 節流/重試設定
-COPILOT_MAX_RETRIES = int(os.getenv("COPILOT_MAX_RETRIES", "4"))
-COPILOT_RETRY_BASE_SECONDS = float(os.getenv("COPILOT_RETRY_BASE_SECONDS", "2"))
-COPILOT_RETRY_MAX_SECONDS = float(os.getenv("COPILOT_RETRY_MAX_SECONDS", "60"))
 CONVERSATION_HISTORY_LIMIT = int(os.getenv("COPILOT_HISTORY_LIMIT", "14"))
 EDITOR_CONTEXT_MAX_CHARS = int(os.getenv("EDITOR_CONTEXT_MAX_CHARS", "12000"))
 
@@ -447,19 +443,22 @@ class SAPAgent:
     """
     SAP GUI AI Agent
 
-    透過 GitHub Copilot API 實現自然語言操作 SAP 的能力。
+    透過可切換 LLM provider 實現自然語言操作 SAP 的能力。
     """
 
-    def __init__(self, auth: CopilotAuth, model: str = DEFAULT_MODEL):
+    def __init__(self, auth: CopilotAuth = None, model: str = None, provider_name: str = None):
         """
         初始化 Agent。
 
         Args:
-            auth: CopilotAuth 認證物件
-            model: 使用的模型名稱 (預設 gpt-4o)
+            auth: GitHub Copilot provider 使用的認證物件
+            model: 使用的模型名稱
+            provider_name: github_copilot 或 codex
         """
-        self.auth = auth
-        self.model = model
+        self.provider_name = normalize_provider_name(provider_name or DEFAULT_LLM_PROVIDER)
+        self.provider = create_llm_provider(self.provider_name, auth=auth, model=model)
+        self.auth = getattr(self.provider, "auth", auth)
+        self.model = self.provider.model
         self._mode = "auto"  # "auto", "ask", "solve", or "study"
         self.mcp_client = get_default_sync_client() if MCP_SAP_ENABLED else None
         self._mcp_all_tool_schemas = None
@@ -520,7 +519,7 @@ class SAPAgent:
 
     def _call_copilot_api(self, messages, tools=None):
         """
-        呼叫 GitHub Copilot Chat Completions API。
+        呼叫目前 LLM provider 的 Chat Completions API。
 
         Args:
             messages: 對話歷史
@@ -532,112 +531,10 @@ class SAPAgent:
         Raises:
             RuntimeError: API 呼叫失敗
         """
-        headers = {
-            "Authorization": f"Bearer {self.auth.get_token()}",
-            "Content-Type": "application/json",
-            "Editor-Version": "vscode/1.100.0",
-            "Editor-Plugin-Version": "copilot-chat/0.24.0",
-            "Copilot-Integration-Id": "vscode-chat",
-            "Openai-Intent": "conversation-panel",
-        }
-
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": 0.1,  # 低溫度，確保操作穩定
-        }
-
-        if tools:
-            payload["tools"] = tools
-            payload["tool_choice"] = "auto"
-
-        last_error = None
-        for attempt in range(COPILOT_MAX_RETRIES + 1):
-            try:
-                started_at = time.perf_counter()
-                resp = requests.post(
-                    COPILOT_CHAT_URL,
-                    headers=headers,
-                    json=payload,
-                    timeout=60,
-                )
-                self._timing_log("Copilot API call", started_at)
-
-                if resp.status_code == 401:
-                    # Token 過期，嘗試刷新後重試
-                    print("\033[33m[Agent] Copilot Token 過期，正在刷新...\033[0m")
-                    self.auth._refresh_copilot_token()
-                    headers["Authorization"] = f"Bearer {self.auth.get_token()}"
-                    continue
-
-                if resp.status_code in (429, 500, 502, 503, 504):
-                    last_error = self._format_api_error(resp)
-                    if attempt < COPILOT_MAX_RETRIES:
-                        wait_time = self._retry_delay_seconds(resp, attempt)
-                        print(
-                            "\033[33m"
-                            f"[Agent] Copilot API {resp.status_code}，"
-                            f"{wait_time:.1f} 秒後重試 "
-                            f"({attempt + 1}/{COPILOT_MAX_RETRIES})，model={self.model}"
-                            "\033[0m"
-                        )
-                        time.sleep(wait_time)
-                        continue
-
-                if resp.status_code != 200:
-                    raise RuntimeError(self._format_api_error(resp))
-
-                result = resp.json()
-
-                # 偵錯：檢查回應結構
-                if "choices" not in result:
-                    print(f"\033[33m[Agent] API 回應缺少 choices 欄位: {json.dumps(result, ensure_ascii=False)[:500]}\033[0m")
-                elif len(result["choices"]) == 0:
-                    print(f"\033[33m[Agent] API 回應 choices 為空陣列\033[0m")
-
-                return result
-
-            except requests.Timeout:
-                last_error = "Copilot API 回應逾時 (60s)"
-                if attempt < COPILOT_MAX_RETRIES:
-                    wait_time = self._retry_delay_seconds(None, attempt)
-                    print(f"\033[33m[Agent] {last_error}，{wait_time:.1f} 秒後重試 ({attempt + 1}/{COPILOT_MAX_RETRIES})\033[0m")
-                    time.sleep(wait_time)
-                    continue
-                raise RuntimeError(last_error)
-
-            except requests.RequestException as e:
-                last_error = f"網路請求失敗: {e}"
-                if attempt < COPILOT_MAX_RETRIES:
-                    wait_time = self._retry_delay_seconds(None, attempt)
-                    print(f"\033[33m[Agent] {last_error}，{wait_time:.1f} 秒後重試 ({attempt + 1}/{COPILOT_MAX_RETRIES})\033[0m")
-                    time.sleep(wait_time)
-                    continue
-                raise RuntimeError(last_error)
-
-        raise RuntimeError(last_error or "Copilot API 呼叫失敗")
-
-    def _retry_delay_seconds(self, resp, attempt):
-        """依 Retry-After 或 exponential backoff 計算等待時間。"""
-        if resp is not None:
-            retry_after = resp.headers.get("Retry-After")
-            if retry_after:
-                try:
-                    return min(float(retry_after), COPILOT_RETRY_MAX_SECONDS)
-                except ValueError:
-                    pass
-
-        delay = COPILOT_RETRY_BASE_SECONDS * (2 ** attempt)
-        return min(delay, COPILOT_RETRY_MAX_SECONDS)
-
-    def _format_api_error(self, resp):
-        retry_after = resp.headers.get("Retry-After")
-        retry_part = f"\nRetry-After: {retry_after}" if retry_after else ""
-        return (
-            f"Copilot API 呼叫失敗: {resp.status_code}"
-            f"\nmodel: {self.model}"
-            f"{retry_part}"
-            f"\n{resp.text}"
+        return self.provider.chat_completions(
+            messages,
+            tools=tools,
+            timing_callback=self._timing_log,
         )
 
     def _timing_log(self, label, started_at):
@@ -2603,12 +2500,12 @@ class SAPAgent:
         if not choices:
             error_info = response.get("error", {})
             if error_info:
-                return f"Copilot API 錯誤: {error_info.get('message', '')}"
-            return "Copilot API 回應異常，請稍後重試。"
+                return f"LLM API 錯誤: {error_info.get('message', '')}"
+            return "LLM API 回應異常，請稍後重試。"
 
         message = choices[0].get("message", {})
         if not message:
-            return "Copilot API 回應格式異常"
+            return "LLM API 回應格式異常"
 
         self.conversation_history.append(message)
         return message.get("content", "(AI 未回傳訊息)")
@@ -2655,15 +2552,15 @@ class SAPAgent:
             if not choices:
                 error_info = response.get("error", {})
                 if error_info:
-                    return f"Copilot API 錯誤: {error_info.get('message', json.dumps(error_info, ensure_ascii=False))}"
-                return f"Copilot API 回應異常（無 choices），請稍後重試。"
+                    return f"LLM API 錯誤: {error_info.get('message', json.dumps(error_info, ensure_ascii=False))}"
+                return f"LLM API 回應異常（無 choices），請稍後重試。"
 
             choice = choices[0]
             message = choice.get("message", {})
             finish_reason = choice.get("finish_reason", "")
 
             if not message:
-                return "Copilot API 回應格式異常（空 message）"
+                return "LLM API 回應格式異常（空 message）"
 
             self.conversation_history.append(message)
 
@@ -2809,15 +2706,15 @@ class SAPAgent:
             if not choices:
                 error_info = response.get("error", {})
                 if error_info:
-                    return f"Copilot API 錯誤: {error_info.get('message', json.dumps(error_info, ensure_ascii=False))}"
-                return "Copilot API 回應異常（無 choices），請稍後重試。"
+                    return f"LLM API 錯誤: {error_info.get('message', json.dumps(error_info, ensure_ascii=False))}"
+                return "LLM API 回應異常（無 choices），請稍後重試。"
 
             choice = choices[0]
             message = choice.get("message", {})
             finish_reason = choice.get("finish_reason", "")
 
             if not message:
-                return "Copilot API 回應格式異常（空 message）"
+                return "LLM API 回應格式異常（空 message）"
 
             self.conversation_history.append(message)
 

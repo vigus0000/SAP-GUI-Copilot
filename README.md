@@ -2,7 +2,7 @@
 
 > **用自然語言操作 SAP，告別繁瑣的 T-Code。**
 
-SAP GUI Copilot 是一個以 Python 打造的 SAP GUI 智慧助手，透過 COM Interface 深度整合 SAP GUI，結合 GitHub Copilot LLM 實現自然語言驅動的 ERP 操作自動化。
+SAP GUI Copilot 是一個以 Python 打造的 SAP GUI 智慧助手，透過 COM Interface / MCP 深度整合 SAP GUI，並可切換 GitHub Copilot 或 Codex LLM provider 來實現自然語言驅動的 ERP 操作自動化。
 
 ---
 
@@ -18,8 +18,8 @@ SAP GUI Copilot 是一個以 Python 打造的 SAP GUI 智慧助手，透過 COM 
 | 🪟 **Popup-aware Scanner** | 可解析 SAP 多層彈窗、錯誤訊息、焦點欄位、下拉選單、Editor，以及 label ↔ input 對應 |
 | 🔁 **畫面切換自癒** | 每次工具操作後重新掃描 SAP，避免沿用舊畫面元件 ID |
 | 🔒 **Human-in-the-loop** | 敏感操作（儲存、刪除、過帳）強制人工確認，杜絕 AI 寫入錯誤資料 |
-| 🚦 **Copilot 節流保護** | 支援 429 retry/backoff、模型設定與對話歷史裁切 |
-| 💰 **零額外費用** | 直接使用 GitHub Copilot 訂閱的 LLM 能力，無需額外 API Key |
+| 🚦 **LLM 節流保護** | 支援 429 retry/backoff、模型設定與對話歷史裁切 |
+| 🔌 **Provider 可切換** | 支援 GitHub Copilot 與 Codex OAuth provider，可由 UI Connect 或 `/connect` 手動切換 |
 
 ---
 
@@ -47,7 +47,7 @@ SAP GUI Copilot 是一個以 Python 打造的 SAP GUI 智慧助手，透過 COM 
 │          │                                           │
 │  sap_skill_library.py ── skills/ + recordings/       │
 │          │                                           │
-│  copilot_auth.py ── GitHub Copilot API ── LLM       │
+│  llm_provider.py ── Copilot / Codex API ── LLM      │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -59,8 +59,8 @@ SAP GUI Copilot 是一個以 Python 打造的 SAP GUI 智慧助手，透過 COM 
 |------|------|
 | 語言 | Python 3.10+ |
 | SAP 整合 | Stage 2 起以 `mcp-sap-gui` / MCP 為主要路徑，`pywin32` COM Interface 暫作 fallback |
-| LLM 後端 | GitHub Copilot API (`api.githubcopilot.com`) |
-| 認證 | GitHub OAuth Device Flow |
+| LLM 後端 | GitHub Copilot API 或 Codex OAuth HTTP |
+| 認證 | GitHub OAuth Device Flow 或 Codex/ChatGPT 瀏覽器 OAuth |
 | 監控策略 | Polling-based Snapshot Diff（取代不穩定的 `WithEvents`） |
 | SOP / Skill 儲存 | JSON 檔案 (`./skills/`, `./recordings/`) |
 | 套件管理 | `uv` |
@@ -73,7 +73,7 @@ SAP GUI Copilot 是一個以 Python 打造的 SAP GUI 智慧助手，透過 COM 
 
 - **Windows** 作業系統（SAP GUI 僅支援 Windows）
 - **SAP GUI** 已安裝且啟用 Scripting 功能
-- **GitHub Copilot** 訂閱（Individual / Business / Enterprise）
+- **GitHub Copilot** 訂閱（Individual / Business / Enterprise），或可用的 ChatGPT/Codex 帳號
 - **Python 3.10+**
 
 ### 安裝
@@ -98,7 +98,7 @@ python start.py
 
 ### 設定 `.env`
 
-複製 `.env.example` 為 `.env`，填入 SAP 登入資訊與 Copilot 設定：
+複製 `.env.example` 為 `.env`，填入 SAP 登入資訊與 LLM provider 設定：
 
 ```env
 MANDT=
@@ -107,8 +107,17 @@ BCODE=
 SAP_GUI_PATH=
 connection=
 
+LLM_PROVIDER=github_copilot
+
 # Copilot model：目前建議 gpt-5-mini
 COPILOT_MODEL=gpt-5-mini
+
+# Codex OAuth；LLM_PROVIDER=codex 時使用
+# Codex CLI 只作為瀏覽器登入 helper，不用於模型推理
+CODEX_OAUTH_MODEL=gpt-5.5
+CODEX_OAUTH_CHAT_URL=https://chatgpt.com/backend-api/codex/responses
+CODEX_OAUTH_LOGIN_ON_CONNECT=true
+CODEX_OAUTH_LOGIN_TIMEOUT_SECONDS=900
 
 # Auto Mode 控制
 COPILOT_MAX_ITERATIONS=6
@@ -191,13 +200,32 @@ STUDY_WEB_SEARCH_TIMEOUT_SECONDS=8
 STUDY_WEB_SEARCH_CACHE_TTL_SECONDS=86400
 ```
 
-#### Copilot 模型建議
+#### LLM Provider 與模型建議
 
-本專案使用 `api.githubcopilot.com/chat/completions`。不同帳號、方案與組織政策可用模型可能不同，可用 `/models` 端點查詢實際清單。
+`LLM_PROVIDER=github_copilot` 時使用 `api.githubcopilot.com/chat/completions`，仍會走 GitHub Copilot OAuth Device Flow。`LLM_PROVIDER=codex` 時使用 Codex OAuth token 直連 Codex backend Responses endpoint；若尚未登入且 `CODEX_OAUTH_LOGIN_ON_CONNECT=true`，按 **Connect** 會觸發瀏覽器 OAuth 登入。Codex CLI 只作為登入 helper，不作為模型推理連線，也不會使用命令列推理。
+
+也可手動用 `/login` 或下列指令開啟 Codex 瀏覽器登入：
+
+```powershell
+codex login
+```
+
+Codex OAuth 模型使用本機 Codex model cache 可用的模型 ID，例如 `CODEX_OAUTH_MODEL=gpt-5.5`。若要較輕量可改為 `gpt-5.4-mini`。
+
+可在執行中手動切換：
+
+```text
+/connect github_copilot
+/connect codex
+```
+
+UI 模式可按右上角 **Connect**，在 radio button 選單中選擇 GitHub Copilot 或 Codex OAuth；切換時會顯示對應連線方法、HTTP endpoint 與 model 欄位，再重新連線。
 
 | 用途 | `.env` 代號 | 說明 |
 |------|-------------|------|
-| 預設推薦 | `gpt-5-mini` | 快、成本低、適合高頻 ReAct 操作 |
+| GitHub Copilot 預設推薦 | `COPILOT_MODEL=gpt-5-mini` | 快、成本低、適合高頻 ReAct 操作 |
+| Codex OAuth 預設推薦 | `CODEX_OAUTH_MODEL=gpt-5.5` | 使用 Codex OAuth HTTP provider 時的模型 |
+| Codex OAuth endpoint | `CODEX_OAUTH_CHAT_URL=https://chatgpt.com/backend-api/codex/responses` | Codex OAuth token 呼叫的 Codex backend Responses endpoint |
 | 強推理 | `gpt-5.2` | 較強，但較可能增加用量與限流風險 |
 | Claude 平衡 | `claude-sonnet-4.5` | 對複雜表單/彈窗推理表現穩定 |
 | Claude 快速 | `claude-haiku-4.5` | 回應快，適合簡單操作 |
@@ -217,7 +245,7 @@ STUDY_WEB_SEARCH_CACHE_TTL_SECONDS=86400
 ### 使用
 
 ```bash
-# 推薦：先檢查 SAP / Copilot 登入，再啟動主程式
+# 推薦：先檢查 SAP / LLM provider 登入，再啟動主程式
 python start.py
 
 # Phase 4 UI：啟動懸浮控制台
@@ -230,7 +258,7 @@ start.bat
 start_ui.bat
 ```
 
-`start.py` 會先確認 SAP GUI 是否已登入；若尚未登入，會執行 `sap_login.py`。接著檢查 GitHub Copilot 授權，完成後預設啟動 `main.py`。若使用 `--ui`，則啟動 `ui_app.py` 的 Tkinter 懸浮控制台。首次啟動時，程式會顯示 GitHub Device Flow 授權碼，在瀏覽器中完成授權後即可使用。
+`start.py` 會先確認 SAP GUI 是否已登入；若尚未登入，會執行 `sap_login.py`。接著依 `LLM_PROVIDER` 檢查 GitHub Copilot 授權或 Codex OAuth 設定，完成後預設啟動 `main.py`。若使用 `--ui`，則啟動 `ui_app.py` 的 Tkinter 懸浮控制台。使用 GitHub Copilot 且首次啟動時，程式會顯示 GitHub Device Flow 授權碼，在瀏覽器中完成授權後即可使用；使用 Codex OAuth 時可用 `/login` 觸發 Codex CLI 瀏覽器登入。
 
 ### Stage 2 MCP 遷移
 
@@ -281,7 +309,7 @@ Phase 2.1 新增 MCP speed mode：
 - `MCP_POPUP_USE_POPUP_TOOL_ONLY=true` 時，活動視窗是彈窗時只讀 `sap_get_popup_window`，不再額外掃彈窗 elements
 - tool 執行後優先使用 MCP action response 內建的 `screen`，一般欄位寫入不重掃畫面，導航/彈窗類工具才補輕量 `sap_get_screen_info`
 - 同畫面多欄輸入會提示模型優先使用 `sap_set_batch_fields`，減少逐欄 tool call 與重掃
-- `MCP_TIMING_DEBUG=true` 可列印 Copilot API、MCP call、screen scan 耗時，方便比對優化前後
+- `MCP_TIMING_DEBUG=true` 可列印 LLM API、MCP call、screen scan 耗時，方便比對優化前後
 
 Phase 3 已將 `sap_monitor.py` 改為 MCP-first polling：
 
@@ -299,7 +327,8 @@ Phase 3 已將 `sap_monitor.py` 改為 MCP-first polling：
 |------|------|
 | `自然語言` | 直接輸入指令，AI 自動操作 SAP（Auto Mode）或回答問題（Ask Mode） |
 | `/scan` | 掃描並顯示當前 SAP 畫面、彈窗、錯誤訊息、欄位摘要與可操作元件 |
-| `/login` | 重新執行 GitHub Copilot 授權流程 |
+| `/connect github_copilot` / `/connect codex` | 重新連線並手動切換 LLM provider；UI 可用 Connect 按鈕切換 |
+| `/login` | 重新執行目前 LLM provider 授權流程；GitHub Copilot 走 GitHub device flow，Codex OAuth 走 Codex CLI 瀏覽器登入 |
 | `/reset` | 重置 AI 對話歷史 |
 | `/mcp` | 檢查 MCP SAP GUI server 啟動、工具清單、SAP session attach 與 stderr 診斷 |
 | `/quit` | 結束程式 |
@@ -380,7 +409,7 @@ Skill 草稿保存會先清理自然語句，避免整句話直接變成檔名�
 
 Skill Library 會維護 `skills/_skill_index.json`，替每個 skill 建立 canonical name、tags、來源與檔案路徑。查詢 skill 時會綜合檔名、Markdown 標題、`Tags:` metadata、原始查詢別名與 SAP 關鍵詞做語意式匹配；例如 `查物料`、`教我查物料`、`查詢物料` 會對應到同一個 `查詢物料` skill。
 
-若工具執行中途被 Ctrl+C 或例外中斷，Copilot API 可能拒絕後續請求並回報 `assistant message with tool_calls must be followed by tool messages`。目前 Agent 會在送出下一次 API 前自動修復這類 dangling tool-call history；通常可直接重新輸入指令，不需要手動 `/reset`。
+若工具執行中途被 Ctrl+C 或例外中斷，LLM API 可能拒絕後續請求並回報 `assistant message with tool_calls must be followed by tool messages`。目前 Agent 會在送出下一次 API 前自動修復這類 dangling tool-call history；通常可直接重新輸入指令，不需要手動 `/reset`。
 
 Study Mode 預設採互動式參考引導流程；錄製值與錄製畫面不是絕對準則，而是提示使用者理解流程的參考資料：
 
@@ -474,6 +503,7 @@ SAP_Copilot/
 ├── start.py             # 啟動器：確認 SAP / Copilot 登入後啟動 CLI 或 UI
 ├── start.bat            # Windows 啟動批次檔
 ├── start_ui.bat         # Windows UI 啟動批次檔
+├── llm_provider.py      # LLM provider adapter：GitHub Copilot / Codex OAuth
 ├── copilot_auth.py      # GitHub Copilot OAuth 認證
 ├── sap_core.py          # SAP GUI COM 連線管理
 ├── sap_agent_tools.py   # 畫面掃描 (Scanner) + 操作工具 (Actor)
@@ -496,7 +526,7 @@ SAP_Copilot/
 
 ### Copilot 429 與節流
 
-Auto Mode 是 ReAct loop，一個使用者指令可能觸發多次 LLM 呼叫。若模型較重、SAP 畫面摘要過大、或短時間連續操作，GitHub Copilot 可能回傳 `429`。
+Auto Mode 是 ReAct loop，一個使用者指令可能觸發多次 LLM 呼叫。若模型較重、SAP 畫面摘要過大、或短時間連續操作，LLM provider 可能回傳 `429`。
 
 目前已加入以下保護：
 

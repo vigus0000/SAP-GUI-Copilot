@@ -4,16 +4,18 @@ SAP GUI Copilot startup launcher.
 流程：
 1. 確認 SAP GUI 是否已有登入完成的 session
 2. 若尚未登入，執行 sap_login.py
-3. 確認 GitHub Copilot 已授權；未授權則執行 device login
+3. 確認 LLM provider 可用；GitHub Copilot 走 device login，Codex OAuth 走瀏覽器登入
 4. 啟動 main.py
 """
 
 import subprocess
 import sys
 import time
+import os
 from pathlib import Path
 
 from copilot_auth import CopilotAuth
+from llm_provider import create_llm_provider, normalize_provider_name
 from sap_core import SAPConnection
 
 
@@ -70,7 +72,17 @@ def ensure_sap_login() -> bool:
     return False
 
 
-def ensure_copilot_login() -> bool:
+def ensure_llm_login() -> bool:
+    provider_name = normalize_provider_name(os.getenv("LLM_PROVIDER", "github_copilot"))
+    if provider_name == "codex_oauth":
+        try:
+            create_llm_provider(provider_name).ensure_login()
+            print("[Start] Codex 授權設定有效")
+            return True
+        except Exception as exc:
+            print(f"[Start] Codex 授權設定無效: {exc}")
+            return False
+
     auth = CopilotAuth()
     if not auth.is_logged_in():
         print("[Start] 尚未登入 GitHub Copilot，開始授權...")
@@ -91,7 +103,7 @@ def main() -> int:
 
     if not ensure_sap_login():
         return 1
-    if not ensure_copilot_login():
+    if not ensure_llm_login():
         return 1
 
     target = UI_SCRIPT if use_ui else MAIN_SCRIPT

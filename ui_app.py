@@ -19,6 +19,7 @@ import pythoncom
 
 import llm_brain
 from copilot_auth import CopilotAuth
+from llm_provider import create_llm_provider, normalize_provider_name, provider_display_name
 from llm_brain import SAPAgent
 from sap_agent_tools import (
     confirmed_click,
@@ -37,7 +38,7 @@ from sap_table_inspector import format_table_inspection, inspect_current_tables
 from mcp_client import get_default_sync_client
 
 
-APP_VERSION = "0.12.1"
+APP_VERSION = "0.13.0"
 
 MODE_LABELS = {
     "auto": "Auto",
@@ -234,6 +235,7 @@ class SAPCopilotWorker(threading.Thread):
             "ready": self.ready,
             "mode": self.agent.mode if self.agent else "auto",
             "model": self.agent.model if self.agent else "",
+            "provider": self.agent.provider_name if self.agent else normalize_provider_name(os.getenv("LLM_PROVIDER", "github_copilot")),
             "recording": self.recorder.recording_name if self.recorder and self.recorder.is_recording else "",
         }
         try:
@@ -263,22 +265,29 @@ class SAPCopilotWorker(threading.Thread):
             self._stop_monitor()
             pythoncom.CoUninitialize()
 
-    def _connect(self):
-        self.log("Initializing Copilot and SAP connection...")
+    def _connect(self, provider_name=None):
+        requested_provider = normalize_provider_name(provider_name or os.getenv("LLM_PROVIDER", "github_copilot"))
+        self.log(f"Initializing {provider_display_name(requested_provider)} and SAP connection...")
         self.ready = False
         try:
-            self.auth = CopilotAuth()
-            if not self.auth.is_logged_in():
-                self.log("GitHub Copilot is not logged in; starting device login in console...")
-                if not self.auth.login():
-                    raise RuntimeError("GitHub Copilot login failed")
-            self.auth.get_token()
+            self.auth = None
+            if requested_provider == "github_copilot":
+                self.auth = CopilotAuth()
+                if not self.auth.is_logged_in():
+                    self.log("GitHub Copilot is not logged in; starting device login in console...")
+                    if not self.auth.login():
+                        raise RuntimeError("GitHub Copilot login failed")
+                self.auth.get_token()
+            else:
+                provider = create_llm_provider(requested_provider)
+                provider.ensure_login()
+            os.environ["LLM_PROVIDER"] = requested_provider
 
             self.sap = SAPConnection()
             session = self.sap.get_session()
             info = self.sap.get_session_info(session)
 
-            self.agent = SAPAgent(self.auth)
+            self.agent = SAPAgent(auth=self.auth, provider_name=requested_provider)
             self.agent._handle_confirmation = self._handle_confirmation_ui
             llm_brain.TOOL_FUNCTIONS["guide_user_action"] = self._guide_user_action_ui
             self.recorder = SAPRecorder()
@@ -288,7 +297,8 @@ class SAPCopilotWorker(threading.Thread):
             self.log(
                 "Connected: "
                 f"{info.get('system_name', 'SAP')} client={info.get('client', 'N/A')} "
-                f"user={info.get('user', 'N/A')} tcode={info.get('transaction', 'N/A')}"
+                f"user={info.get('user', 'N/A')} tcode={info.get('transaction', 'N/A')} "
+                f"provider={provider_display_name(self.agent.provider_name)} model={self.agent.model}"
             )
         except Exception as exc:
             self.log(f"Connection failed: {exc}")
@@ -308,7 +318,7 @@ class SAPCopilotWorker(threading.Thread):
             if action == "shutdown":
                 self.stop_requested = True
             elif action == "connect":
-                self._connect()
+                self._connect(job.get("provider"))
             elif action == "set_mode":
                 self._set_mode(job.get("mode", "auto"))
             elif action == "send":
@@ -568,9 +578,9 @@ class SAPCopilotWorker(threading.Thread):
         elif cmd == "/skills":
             self._handle_skills_command(arg)
         elif cmd == "/connect":
-            self._connect()
+            self._connect(arg or None)
         else:
-            self.log("Available commands: /scan, /inspect table, /mcp, /record, /stop, /recordings, /play, /study, /knowledge, /skills, /ask, /solve, /auto, /reset")
+            self.log("Available commands: /scan, /inspect table, /mcp, /record, /stop, /recordings, /play, /study, /knowledge, /skills, /ask, /solve, /auto, /connect, /reset")
 
     def _parse_inline_options(self, text):
         options = {}
@@ -845,6 +855,7 @@ class SAPCopilotWorker(threading.Thread):
                 rec_data.get("events", []),
                 self.auth,
                 screen_state=screen_state,
+                provider=self.agent.provider,
             )
             if sop_path:
                 self.log(f"AI SOP saved: {sop_path}")
@@ -998,7 +1009,7 @@ class SAPCopilotUI:
                 command=lambda item=mode: self.worker.submit("set_mode", mode=item),
             ).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(modes, text="Study", command=self._study_dialog).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(modes, text="Connect", command=lambda: self.worker.submit("connect")).pack(side=tk.RIGHT)
+        ttk.Button(modes, text="Connect", command=self._connect_dialog).pack(side=tk.RIGHT)
 
         actions = ttk.Frame(outer)
         actions.pack(fill=tk.X, pady=(0, 8))
@@ -1043,6 +1054,124 @@ class SAPCopilotUI:
         goal = simpledialog.askstring("Study", "SOP name, or --draft goal:", parent=self.root)
         if goal:
             self.worker.submit("study", goal=goal.strip())
+
+    def _connect_dialog(self):
+        current = normalize_provider_name(os.getenv("LLM_PROVIDER", "github_copilot"))
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Connect")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        provider_var = tk.StringVar(value=current)
+        model_var = tk.StringVar()
+        endpoint_var = tk.StringVar()
+        key_var = tk.StringVar()
+        status_var = tk.StringVar()
+
+        outer = ttk.Frame(dialog, padding=12)
+        outer.pack(fill=tk.BOTH, expand=True)
+
+        provider_box = ttk.LabelFrame(outer, text="LLM Provider")
+        provider_box.pack(fill=tk.X)
+        ttk.Radiobutton(
+            provider_box,
+            text="GitHub Copilot",
+            variable=provider_var,
+            value="github_copilot",
+        ).pack(anchor=tk.W, padx=8, pady=(6, 2))
+        ttk.Radiobutton(
+            provider_box,
+            text="Codex OAuth",
+            variable=provider_var,
+            value="codex_oauth",
+        ).pack(anchor=tk.W, padx=8, pady=(2, 6))
+
+        method_box = ttk.LabelFrame(outer, text="連線方法")
+        method_box.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        method_text = tk.Text(method_box, width=72, height=8, wrap=tk.WORD)
+        method_text.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        method_text.configure(state=tk.DISABLED)
+
+        form = ttk.Frame(outer)
+        form.pack(fill=tk.X, pady=(10, 0))
+        ttk.Label(form, text="Model").grid(row=0, column=0, sticky=tk.W, pady=2)
+        model_entry = ttk.Entry(form, textvariable=model_var, width=46)
+        model_entry.grid(row=0, column=1, sticky=tk.W, padx=(8, 0), pady=2)
+        endpoint_label = ttk.Label(form, text="Endpoint")
+        endpoint_label.grid(row=1, column=0, sticky=tk.W, pady=2)
+        endpoint_entry = ttk.Entry(form, textvariable=endpoint_var, width=46)
+        endpoint_entry.grid(row=1, column=1, sticky=tk.W, padx=(8, 0), pady=2)
+        auth_label = ttk.Label(form, text="Auth")
+        auth_label.grid(row=2, column=0, sticky=tk.W, pady=2)
+        key_entry = ttk.Entry(form, textvariable=key_var, width=46, show="*")
+        key_entry.grid(row=2, column=1, sticky=tk.W, padx=(8, 0), pady=2)
+
+        ttk.Label(outer, textvariable=status_var, foreground="#666").pack(fill=tk.X, pady=(8, 0))
+
+        def _write_method(text):
+            method_text.configure(state=tk.NORMAL)
+            method_text.delete("1.0", tk.END)
+            method_text.insert("1.0", text)
+            method_text.configure(state=tk.DISABLED)
+
+        def _refresh_fields(*_args):
+            provider = normalize_provider_name(provider_var.get())
+            if provider == "github_copilot":
+                model_var.set(os.getenv("COPILOT_MODEL", "gpt-5-mini"))
+                endpoint_var.set("https://api.githubcopilot.com/chat/completions")
+                key_var.set("")
+                endpoint_label.configure(text="Endpoint")
+                auth_label.configure(text="API Key")
+                endpoint_entry.configure(state=tk.DISABLED)
+                key_entry.configure(state=tk.DISABLED, show="")
+                _write_method(
+                    "GitHub Copilot 連線方式\n"
+                    "1. 使用 GitHub OAuth Device Flow。\n"
+                    "2. 不需要在此輸入 API Key。\n"
+                    "3. 若尚未登入，Connect 後會在 console 顯示 GitHub 授權碼。\n"
+                    "4. 適合沿用既有 GitHub Copilot 訂閱。"
+                )
+                status_var.set("目前將使用 GitHub Copilot OAuth。")
+            else:
+                model_var.set(os.getenv("CODEX_OAUTH_MODEL") or "gpt-5.5")
+                endpoint_var.set(os.getenv("CODEX_OAUTH_CHAT_URL", "https://chatgpt.com/backend-api/codex/responses"))
+                key_var.set(os.path.join(os.path.expanduser("~"), ".codex", "auth.json"))
+                endpoint_label.configure(text="Endpoint")
+                auth_label.configure(text="Token Cache")
+                endpoint_entry.configure(state=tk.DISABLED)
+                key_entry.configure(state=tk.DISABLED, show="")
+                _write_method(
+                    "Codex OAuth 連線方式\n"
+                    "1. 使用 OpenAI/Codex OAuth 帳號登入，不需要 API Key。\n"
+                    "2. 首次使用請按 /login，系統只會開啟 Codex 瀏覽器登入頁。\n"
+                    "3. 登入後讀取本機 ~/.codex/auth.json 的 OAuth token。\n"
+                    "4. 模型呼叫由 SAP_Copilot 直接走 HTTP endpoint，不使用命令列推理。"
+                )
+                status_var.set("Connect 只會使用瀏覽器 OAuth 登入；模型推理不走命令列。")
+
+        provider_var.trace_add("write", _refresh_fields)
+        _refresh_fields()
+
+        buttons = ttk.Frame(outer)
+        buttons.pack(fill=tk.X, pady=(12, 0))
+
+        def _connect_selected():
+            provider = normalize_provider_name(provider_var.get())
+            if provider == "github_copilot":
+                os.environ["COPILOT_MODEL"] = model_var.get().strip() or os.getenv("COPILOT_MODEL", "gpt-5-mini")
+            else:
+                os.environ["CODEX_OAUTH_MODEL"] = model_var.get().strip() or os.getenv("CODEX_OAUTH_MODEL", "gpt-5.5")
+            os.environ["LLM_PROVIDER"] = provider
+            self.worker.submit("connect", provider=provider)
+            dialog.destroy()
+
+        ttk.Button(buttons, text="Connect", command=_connect_selected).pack(side=tk.RIGHT)
+        ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT, padx=(0, 8))
+
+        dialog.bind("<Return>", lambda _event: _connect_selected())
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        dialog.wait_window()
 
     def send(self):
         text = self.input_text.get("1.0", tk.END).strip()
@@ -1100,7 +1229,8 @@ class SAPCopilotUI:
         user = state.get("user") or "-"
         client = state.get("client") or "-"
         self.sap_var.set(f"SAP: {ready} | {tcode} | {client}/{user}")
-        self.model_var.set(f"Model: {state.get('model') or '-'}")
+        provider = provider_display_name(state.get("provider") or "github_copilot")
+        self.model_var.set(f"Model: {provider} / {state.get('model') or '-'}")
         recording = state.get("recording") or ""
         self.recording_var.set(f"REC: {recording}" if recording else "")
 

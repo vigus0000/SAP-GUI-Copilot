@@ -5,3 +5,4 @@ __pycache__/
 diary.txt
 todo.txt
 external/mcp-sap-gui/
+tmp_openai_docs_cache/

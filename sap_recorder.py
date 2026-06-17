@@ -10,9 +10,9 @@ SAP GUI 操作紀錄管理器
 
 import json
 import os
-import time
-import requests
 from datetime import datetime
+
+from llm_provider import create_llm_provider, normalize_provider_name
 
 
 NOISY_EVENT_TYPES = {"FOCUS_CHANGE", "FIELD_DEFAULT"}
@@ -414,21 +414,21 @@ class SAPRecorder:
 
         return "，".join(parts)
 
-    def generate_sop_with_llm(self, name, events, auth, screen_state=None):
+    def generate_sop_with_llm(self, name, events, auth=None, screen_state=None, provider=None, provider_name=None):
         """
         使用 LLM 將錄製的 raw events 轉換為自然語言 SOP 指南。
 
         Args:
             name: SOP 名稱
             events: compacted events 列表
-            auth: CopilotAuth 認證物件
+            auth: GitHub Copilot provider 使用的認證物件
             screen_state: 停止錄製時的畫面掃描（可選）
+            provider: 已建立的 LLM provider（可選）
+            provider_name: provider 名稱（可選）
 
         Returns:
             str: 儲存的 .md 檔案路徑，失敗時回傳空字串
         """
-        from copilot_auth import CopilotAuth
-
         events_json = json.dumps(events, ensure_ascii=False, indent=2)
         screen_context = ""
         if screen_state:
@@ -471,78 +471,34 @@ class SAPRecorder:
 3. ...
 """
 
-        headers = {
-            "Authorization": f"Bearer {auth.get_token()}",
-            "Content-Type": "application/json",
-            "Editor-Version": "vscode/1.100.0",
-            "Editor-Plugin-Version": "copilot-chat/0.24.0",
-            "Copilot-Integration-Id": "vscode-chat",
-            "Openai-Intent": "conversation-panel",
-        }
-
-        model = os.getenv("COPILOT_MODEL", "gpt-5-mini")
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": "你是一個 SAP GUI 操作文件撰寫專家。你的任務是將 JSON 格式的操作錄製事件轉換成清晰的自然語言操作指南。"},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.2,
-        }
-
-        copilot_url = "https://api.githubcopilot.com/chat/completions"
-        max_retries = 3
-
-        for attempt in range(max_retries + 1):
-            try:
-                resp = requests.post(copilot_url, headers=headers, json=payload, timeout=90)
-
-                if resp.status_code == 401 and attempt < max_retries:
-                    print("\033[33m[Recorder] Token 過期，刷新中...\033[0m")
-                    auth._refresh_copilot_token()
-                    headers["Authorization"] = f"Bearer {auth.get_token()}"
-                    continue
-
-                if resp.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
-                    wait = min(2 ** attempt * 2, 30)
-                    print(f"\033[33m[Recorder] API {resp.status_code}，{wait}s 後重試 ({attempt+1}/{max_retries})\033[0m")
-                    time.sleep(wait)
-                    continue
-
-                if resp.status_code != 200:
-                    print(f"\033[31m[Recorder] SOP 生成失敗: HTTP {resp.status_code}\033[0m")
-                    return ""
-
-                result = resp.json()
-                choices = result.get("choices", [])
-                if not choices:
-                    print("\033[31m[Recorder] SOP 生成失敗: API 回應無 choices\033[0m")
-                    return ""
-
-                sop_text = choices[0].get("message", {}).get("content", "")
-                if not sop_text.strip():
-                    print("\033[31m[Recorder] SOP 生成失敗: 回傳內容為空\033[0m")
-                    return ""
-
-                # 儲存到 ./skills/
-                os.makedirs(SKILLS_DIR, exist_ok=True)
-                safe_name = "".join(c for c in name if c.isalnum() or c in (" ", "_", "-", ".", "（", "）"))
-                safe_name = safe_name.strip() or "unnamed"
-                filepath = os.path.join(SKILLS_DIR, f"{safe_name}.md")
-                with open(filepath, "w", encoding="utf-8") as f:
-                    f.write(sop_text)
-
-                print(f"\033[1;32m  📄 已生成自然語言 SOP: {filepath}\033[0m")
-                return filepath
-
-            except requests.Timeout:
-                if attempt < max_retries:
-                    print(f"\033[33m[Recorder] API 逾時，重試中 ({attempt+1}/{max_retries})\033[0m")
-                    continue
-                print("\033[31m[Recorder] SOP 生成失敗: API 逾時\033[0m")
-                return ""
-            except Exception as e:
-                print(f"\033[31m[Recorder] SOP 生成失敗: {e}\033[0m")
+        try:
+            llm = provider or create_llm_provider(normalize_provider_name(provider_name), auth=auth)
+            result = llm.chat_completions(
+                [
+                    {"role": "system", "content": "你是一個 SAP GUI 操作文件撰寫專家。你的任務是將 JSON 格式的操作錄製事件轉換成清晰的自然語言操作指南。"},
+                    {"role": "user", "content": prompt},
+                ],
+                tools=None,
+            )
+            choices = result.get("choices", [])
+            if not choices:
+                print("\033[31m[Recorder] SOP 生成失敗: API 回應無 choices\033[0m")
                 return ""
 
-        return ""
+            sop_text = choices[0].get("message", {}).get("content", "")
+            if not sop_text.strip():
+                print("\033[31m[Recorder] SOP 生成失敗: 回傳內容為空\033[0m")
+                return ""
+
+            os.makedirs(SKILLS_DIR, exist_ok=True)
+            safe_name = "".join(c for c in name if c.isalnum() or c in (" ", "_", "-", ".", "（", "）"))
+            safe_name = safe_name.strip() or "unnamed"
+            filepath = os.path.join(SKILLS_DIR, f"{safe_name}.md")
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(sop_text)
+
+            print(f"\033[1;32m  📄 已生成自然語言 SOP: {filepath}\033[0m")
+            return filepath
+        except Exception as exc:
+            print(f"\033[31m[Recorder] SOP 生成失敗: {exc}\033[0m")
+            return ""

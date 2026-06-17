@@ -4,6 +4,7 @@ SAP GUI Copilot — CLI 入口 (Phase 4 — Agentic Coach)
 互動式 REPL 介面，支援：
 - 自然語言指令 → AI 操作 SAP (Auto Mode)
 - /scan        → 顯示當前畫面掃描結果
+- /connect [provider] → 切換 LLM provider（github_copilot / codex）
 - /login       → 重新執行 GitHub Copilot 授權
 - /reset       → 重置對話歷史
 - /record [名稱] → 開始錄製操作（Record Mode）
@@ -26,6 +27,11 @@ import time
 from datetime import datetime
 
 from copilot_auth import CopilotAuth
+from llm_provider import (
+    create_llm_provider,
+    normalize_provider_name,
+    provider_display_name,
+)
 from sap_core import SAPConnection
 from sap_agent_tools import scan_sap_screen
 from llm_brain import SAPAgent
@@ -39,6 +45,34 @@ from sap_table_inspector import format_table_inspection, inspect_current_tables
 
 def env_enabled(name, default="false"):
     return str(os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def ensure_llm_provider(provider_name=None):
+    """Create and validate the configured LLM provider."""
+    normalized = normalize_provider_name(provider_name or os.getenv("LLM_PROVIDER", "github_copilot"))
+    auth = None
+    print(f"{Colors.CYAN}[1/2] 檢查 LLM Provider: {provider_display_name(normalized)}...{Colors.RESET}")
+
+    if normalized == "github_copilot":
+        auth = CopilotAuth()
+        if not auth.is_logged_in():
+            print(f"{Colors.YELLOW}  尚未登入 GitHub Copilot，開始授權流程{Colors.RESET}")
+            success = auth.login()
+            if not success:
+                raise RuntimeError("GitHub Copilot 授權失敗")
+        else:
+            print(f"{Colors.GREEN}  ✅ 已登入 GitHub Copilot{Colors.RESET}")
+        auth.get_token()
+        print(f"{Colors.GREEN}  ✅ Copilot API Token 有效{Colors.RESET}")
+    elif normalized == "codex_oauth":
+        provider = create_llm_provider(normalized)
+        provider.ensure_login()
+        print(f"{Colors.GREEN}  ✅ {provider_display_name(normalized)} 授權設定有效{Colors.RESET}")
+    else:
+        raise RuntimeError(f"不支援的 LLM Provider: {provider_name}")
+
+    os.environ["LLM_PROVIDER"] = normalized
+    return auth, normalized
 
 
 def parse_study_request(raw_text):
@@ -88,7 +122,7 @@ def print_banner():
     print(f"""
 {Colors.CYAN}╔══════════════════════════════════════════════════╗
 ║                                                  ║
-║   🤖 SAP GUI Copilot  V0.12.1 (Stage 2)         ║
+║   🤖 SAP GUI Copilot  V0.13.0 (Stage 2)         ║
 ║   ─────────────────────────────────────────────   ║
 ║   用自然語言操作 SAP，告別繁瑣的 T-Code！        ║
 ║                                                  ║
@@ -107,7 +141,8 @@ def print_banner():
     /solve         切換到 Solve Mode（問題排解模式）
     /auto          切換回 Auto Mode（自動代操）
     /mcp           檢查 MCP SAP GUI server 狀態
-    /login         重新執行 GitHub Copilot 授權
+    /connect       切換 LLM provider（github_copilot / codex）
+    /login         重新執行目前 LLM provider 授權
     /reset         重置對話歷史
     /quit          結束程式{Colors.RESET}
 """)
@@ -581,29 +616,12 @@ def main():
 
     print_banner()
 
-    # ===== Step 1: GitHub Copilot 認證 =====
-    print(f"{Colors.CYAN}[1/2] 檢查 GitHub Copilot 認證...{Colors.RESET}")
-    auth = CopilotAuth()
-
-    if not auth.is_logged_in():
-        print(f"{Colors.YELLOW}  尚未登入，開始 GitHub Copilot 授權流程{Colors.RESET}")
-        success = auth.login()
-        if not success:
-            print(f"{Colors.RED}  授權失敗，程式結束{Colors.RESET}")
-            sys.exit(1)
-    else:
-        print(f"{Colors.GREEN}  ✅ 已登入 GitHub Copilot{Colors.RESET}")
-        # 驗證 Copilot Token 可用（login() 流程中已自動換取）
-        try:
-            auth.get_token()
-            print(f"{Colors.GREEN}  ✅ Copilot API Token 有效{Colors.RESET}")
-        except RuntimeError as e:
-            print(f"{Colors.YELLOW}  Copilot Token 無效: {e}{Colors.RESET}")
-            print(f"{Colors.YELLOW}  嘗試重新登入...{Colors.RESET}")
-            success = auth.login()
-            if not success:
-                print(f"{Colors.RED}  授權失敗，程式結束{Colors.RESET}")
-                sys.exit(1)
+    # ===== Step 1: LLM Provider 認證 =====
+    try:
+        auth, llm_provider_name = ensure_llm_provider()
+    except RuntimeError as exc:
+        print(f"{Colors.RED}  ❌ LLM Provider 初始化失敗: {exc}{Colors.RESET}")
+        sys.exit(1)
 
     # ===== Step 2: 連接 SAP GUI =====
     print(f"\n{Colors.CYAN}[2/2] 連接 SAP GUI...{Colors.RESET}")
@@ -623,7 +641,7 @@ def main():
         sys.exit(1)
 
     # ===== 初始化 Agent、Monitor、Recorder =====
-    agent = SAPAgent(auth)
+    agent = SAPAgent(auth=auth, provider_name=llm_provider_name)
     recorder = SAPRecorder()
     skill_library = SAPSkillLibrary()
     knowledge_library = SAPKnowledgeLibrary()
@@ -634,7 +652,7 @@ def main():
     print(f"\n{Colors.GREEN}{'═' * 50}{Colors.RESET}")
     print(f"{Colors.GREEN}  🚀 SAP GUI Copilot 已就緒！{Colors.RESET}")
     print(f"{Colors.GREEN}  📍 當前模式: {Colors.MAGENTA}🟣 Auto Mode（自動代操）{Colors.RESET}")
-    print(f"{Colors.GREEN}  🧠 Copilot Model: {Colors.WHITE}{agent.model}{Colors.RESET}")
+    print(f"{Colors.GREEN}  🧠 LLM Provider: {Colors.WHITE}{provider_display_name(agent.provider_name)} / {agent.model}{Colors.RESET}")
     print(f"{Colors.GREEN}{'═' * 50}{Colors.RESET}\n")
 
     # ===== REPL 迴圈 =====
@@ -687,9 +705,40 @@ def main():
                 except ConnectionError as e:
                     print(f"{Colors.RED}  SAP connection failed: {e}{Colors.RESET}")
 
+            # --- /connect [github_copilot|codex] ---
+            elif cmd == "/connect" or cmd.startswith("/connect "):
+                parts = user_input.split(maxsplit=1)
+                requested = parts[1].strip() if len(parts) > 1 else agent.provider_name
+                previous_mode = agent.mode
+                try:
+                    auth, llm_provider_name = ensure_llm_provider(requested)
+                    agent = SAPAgent(auth=auth, provider_name=llm_provider_name)
+                    agent.set_mode(previous_mode)
+                    print(
+                        f"{Colors.GREEN}  ✅ 已切換 LLM Provider: "
+                        f"{provider_display_name(agent.provider_name)} / {agent.model}{Colors.RESET}"
+                    )
+                except Exception as exc:
+                    print(f"{Colors.RED}  LLM Provider 切換失敗: {exc}{Colors.RESET}")
+
             # --- /login ---
             elif cmd == "/login":
-                auth.login()
+                if agent.provider_name == "github_copilot":
+                    if auth is None:
+                        auth = CopilotAuth()
+                    auth.login()
+                    agent = SAPAgent(auth=auth, provider_name="github_copilot")
+                    print(f"{Colors.GREEN}  ✅ GitHub Copilot 已重新授權{Colors.RESET}")
+                elif agent.provider_name == "codex_oauth":
+                    provider = create_llm_provider(agent.provider_name)
+                    login = getattr(provider, "login", None)
+                    if not callable(login):
+                        raise RuntimeError("目前 Codex provider 不支援 OAuth login")
+                    login()
+                    agent = SAPAgent(provider_name="codex_oauth")
+                    print(f"{Colors.GREEN}  ✅ Codex OAuth 已重新授權{Colors.RESET}")
+                else:
+                    print(f"{Colors.YELLOW}  目前 provider 不支援互動式登入；請使用 /connect github_copilot 或 /connect codex。{Colors.RESET}")
 
             # --- /reset ---
             elif cmd == "/reset":
@@ -760,6 +809,7 @@ def main():
                             rec_data.get("events", []),
                             auth,
                             screen_state=screen_state,
+                            provider=agent.provider,
                         )
                         if sop_path:
                             print(f"{Colors.GREEN}  ✅ 自然語言 SOP 已儲存，可用 /study {rec_name} 啟動教練引導{Colors.RESET}")
@@ -937,7 +987,7 @@ def main():
             # --- 未知指令 ---
             elif user_input.startswith("/"):
                 print(f"{Colors.YELLOW}  未知指令: {user_input}{Colors.RESET}")
-                print(f"{Colors.DIM}  可用指令: /scan, /record, /stop, /recordings, /play, /study, /knowledge, /skills, /ask, /solve, /auto, /mcp, /login, /reset, /quit{Colors.RESET}")
+                print(f"{Colors.DIM}  可用指令: /scan, /record, /stop, /recordings, /play, /study, /knowledge, /skills, /ask, /solve, /auto, /mcp, /connect, /login, /reset, /quit{Colors.RESET}")
 
             # ===== 自然語言指令 → AI Agent =====
             else:

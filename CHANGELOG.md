@@ -6,6 +6,29 @@
 
 ---
 
+## [0.13.0] - 2026-06-17
+
+#### Added
+- 新增 LLM provider 抽象層 `llm_provider.py`，支援 `github_copilot` 與 `codex` 兩種連線方式。
+- 新增 Codex OAuth provider：`LLM_PROVIDER=codex` 時讀取 Codex/ChatGPT 瀏覽器 OAuth 快取，使用 OAuth access token 直接呼叫 Codex backend Responses endpoint，模型由 `CODEX_OAUTH_MODEL` 控制。
+- 新增 Codex OAuth 設定：`CODEX_OAUTH_MODEL`、`CODEX_OAUTH_CHAT_URL`、`CODEX_OAUTH_LOGIN_ON_CONNECT`、`CODEX_OAUTH_LOGIN_TIMEOUT_SECONDS`。
+- 新增 `codex_auth.py`，專責讀取 `~/.codex/auth.json` 與觸發 Codex 瀏覽器登入；Codex CLI 只作為登入 helper，不作為模型推理連線。
+- CLI 新增 `/connect github_copilot` / `/connect codex`，可在執行中手動切換 LLM provider 並重建 agent；`/login` 在 Codex OAuth 模式下會觸發 `codex login` 瀏覽器登入。
+- `CODEX_OAUTH_LOGIN_ON_CONNECT=true` 時，Connect 會先讀取本機 OAuth 快取；若 token 不存在或過期才觸發 Codex OAuth 瀏覽器登入。
+
+#### Changed
+- UI 的 **Connect** 按鈕改為 radio button 選單，可在 GitHub Copilot 與 Codex OAuth 間切換；Codex OAuth 頁面顯示 HTTP endpoint、token cache 與 model，不再要求 API key 或 command。
+- `codex` provider alias 現在正規化為 `codex_oauth`；v0.13.0 的 Codex 路徑只保留瀏覽器 OAuth + HTTP token 呼叫。
+- `start.py` 啟動器改為依 `LLM_PROVIDER` 檢查授權；使用 `codex` 時不再強制執行 GitHub Copilot device login。
+- Record Mode 生成 Markdown SOP 時改用目前 agent 的 LLM provider，不再硬綁 GitHub Copilot。
+
+#### Fixed
+- 移除 Codex OAuth provider 中的命令列推理路徑，避免 CLI 參數相容性錯誤與 command-backed inference；SAP_Copilot 現在不再用 `codex.exe` 執行模型呼叫。
+- 修正 Codex OAuth 預設 endpoint/model：改用 `https://chatgpt.com/backend-api/codex/responses` 與 `gpt-5.5`，避免一般 platform API quota 與 `gpt-5-mini` 不支援問題。
+- 修正 Codex backend 要求 streaming 的問題；Codex OAuth provider 現在以 `stream=true` 呼叫 Responses endpoint，並解析 SSE 事件後轉回既有 Chat Completions-like response。
+- 修正 Codex OAuth streaming parser 在 `requests.iter_lines()` 回傳 bytes 時拋出 `a bytes-like object is required, not 'str'` 的問題。
+- 修正 Codex OAuth streaming parser 收到空的 `response.completed` envelope 時覆蓋前面 `output_text.delta` / function-call item，導致 UI 顯示「AI 未回傳任何訊息」的問題。
+
 ## [0.12.1] - 2026-06-16
 
 #### Added
@@ -16,18 +39,24 @@
 - 新增表格 schema-first 讀取：`MCP_TABLE_CONTEXT_SCHEMA_FIRST=true` 時會先呼叫 `sap_read_table(columns_only=true)` 取得欄位 metadata，再讀 rows，支援「項目概觀有哪些欄位」這類欄位查詢。
 - 新增 broad table discovery：filtered MCP discovery 找不到表格候選時，會用 `MCP_TABLE_CONTEXT_BROAD_DISCOVERY_DEPTH` 做一次較深廣域掃描，從 element id / name / text 補抓 table/grid/shell 候選。
 - 新增 shell/report 內容補充讀取：非表格 `GuiShell` 可由 `sap_read_shell_content` 讀取文字、URL 或 HTML preview，作為報表或 HTMLViewer 類畫面的 fallback。
-- 新增表格讀取上限設定：`MCP_READ_TABLES_IN_CONTEXT`、`MCP_READ_SHELLS_IN_CONTEXT`、`MCP_TABLE_CONTEXT_MAX_TABLES`、`MCP_TABLE_CONTEXT_MAX_ROWS`、`MCP_TABLE_CONTEXT_MAX_COLUMNS`、`MCP_TABLE_CONTEXT_DISCOVERY_DEPTH`、`MCP_SHELL_CONTEXT_MAX_CHARS`。
+- 新增表格讀取上限設定：`MCP_READ_TABLES_IN_CONTEXT`、`MCP_READ_SHELLS_IN_CONTEXT`、`MCP_TABLE_CONTEXT_MAX_TABLES`、`MCP_TABLE_CONTEXT_MAX_ROWS`、`MCP_TABLE_CONTEXT_MAX_COLUMNS`、`MCP_TABLE_CONTEXT_MAX_SCHEMA_COLUMNS`、`MCP_TABLE_CONTEXT_DISCOVERY_DEPTH`、`MCP_SHELL_CONTEXT_MAX_CHARS`。
 
 #### Changed
 - legacy GUI fallback scanner 現在也會嘗試讀取 ALV-like `GuiShell` / `GuiGridView` 前 25 列、12 欄，避免 MCP 不可用時完全看不到報表內容。
 - legacy GUI fallback scanner 現在會保留 `GuiTableControl.Columns` schema，即使目前沒有 rows，也能把項目概觀欄位名稱放進 screen summary。
-- Ask / Solve / Study 的 MCP 畫面讀取改為 evidence scan：使用較深的 `MCP_EVIDENCE_SCREEN_MAX_DEPTH` 並包含 `GuiLabel`，避免 ME51N、ME5A、ALV 或 Splitter Layout 只讀到交易碼/標題。
 - `MCP_TABLE_CONTEXT_DISCOVERY_DEPTH` 預設由 4 提高到 6，但仍使用表格/shell type filter，改善 ME51N 項目概觀等深層表格偵測。
 
 #### Fixed
 - 修正表格欄位清單被 `MCP_TABLE_CONTEXT_MAX_COLUMNS=12` 截斷的問題；現在 `columns` / `column_info` 由 `MCP_TABLE_CONTEXT_MAX_SCHEMA_COLUMNS` 獨立控制，資料列 `rows[].cells` 才維持低欄數上限。
-- `main.py --ui` 現在會直接啟動 Tkinter UI；先前只有 `start.py --ui` 會解析 UI 參數，導致 `uv run main.py --ui` 仍進入 CLI。
 - Ask Mode 詢問表格欄位時，若 `rows` 空但 `columns` / `column_info` 已讀到，現在會直接依欄位 schema 回答，不再誤判為「表格內容讀不到」。
+
+## [0.12.0] - 2026-06-16
+
+#### Changed
+- Ask / Solve / Study 的 MCP 畫面讀取改為 evidence scan：使用較深的 `MCP_EVIDENCE_SCREEN_MAX_DEPTH` 並包含 `GuiLabel`，避免 ME51N、ME5A、ALV 或 Splitter Layout 只讀到交易碼/標題。
+
+#### Fixed
+- `main.py --ui` 現在會直接啟動 Tkinter UI；先前只有 `start.py --ui` 會解析 UI 參數，導致 `uv run main.py --ui` 仍進入 CLI。
 - 修正 Ask Mode 在 MCP 輕量掃描沒有讀到欄位/表格時仍直接回覆通用教材的問題；現在會附上 `legacy_screen_summary_fallback`，模型必須先使用 fallback 的 `fields`、`tables`、`status_bar`。
 - Study Mode 現在會拒絕把 `wnd[0]/usr`、container、label 或 status bar 當成輸入欄位；若必填欄位存在但目前畫面沒有讀到精確欄位 ID，會回報 `target_actionable=false` 並要求改為揭露欄位，而不是彈窗要求使用者填不存在的欄位。
 - 修正 Study Mode 執行完一輪後 CLI / UI 會在 `finally` 自動切回 Auto Mode 的惡性狀態機 bug；現在 Study 會保持啟用，只有使用者明確 `/auto`、`/ask`、`/solve` 或按模式按鈕時才切換。
