@@ -38,6 +38,10 @@ from sap_agent_tools import (
     confirmed_handle_popup,
 )
 from mcp_client import MCPClientUnavailable, get_default_sync_client
+from sap_business_tools import (
+    format_business_tools_prompt,
+    get_business_mcp_tool_names,
+)
 
 
 def env_enabled(name, default="true"):
@@ -189,6 +193,8 @@ MCP_CORE_TOOL_NAMES = set(env_list(
         "sap_disconnect",
     ]),
 ))
+MCP_BUSINESS_TOOL_NAMES = get_business_mcp_tool_names()
+MCP_CORE_TOOL_NAMES.update(MCP_BUSINESS_TOOL_NAMES)
 MCP_DYNAMIC_TOOL_GROUPS = {
     "alv": {
         "sap_get_alv_toolbar",
@@ -324,6 +330,12 @@ SYSTEM_PROMPT_AUTO = """你是一個專業的 SAP GUI 操作助手。你可以�
 - sbar 是狀態列，顯示操作結果訊息
 - VKey 0=Enter, 3=F3(返回), 8=F8(執行), 11=Ctrl+S(儲存), 12=F12(取消)
 """
+BUSINESS_TOOLS_PROMPT_SECTION = format_business_tools_prompt()
+if BUSINESS_TOOLS_PROMPT_SECTION:
+    SYSTEM_PROMPT_AUTO = SYSTEM_PROMPT_AUTO.replace(
+        "\n## SAP 基礎知識",
+        f"\n{BUSINESS_TOOLS_PROMPT_SECTION}\n\n## SAP 基礎知識",
+    )
 
 # System Prompt - Ask Mode (僅回答問題，不執行操作)
 SYSTEM_PROMPT_ASK = """你是一個專業的 SAP GUI 問答助手。你**只回答問題，絕對不執行任何操作**。

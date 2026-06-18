@@ -6,6 +6,17 @@
 
 ---
 
+## [0.14.0]
+
+#### Added
+- 新增 `sap_business_tools.py` 業務邏輯 MCP tool registry：集中管理流程級工具的 module、business_cycle、觸發詞、使用情境與 prompt 說明。
+- 新增 `business_tools/README.md`，定義未來新增業務 MCP 工具的 metadata 格式、外部 JSON registry 格式與安全原則。
+- Auto Mode core MCP allowlist 會自動納入 registry 中的業務工具；目前內建 `sap_get_order_overview` 與 `sap_analyze_delivery_block`，用於 VA03 銷售訂單全貌與出貨卡關診斷。
+
+#### Changed
+- Auto prompt 會根據 `sap_business_tools.py` 動態插入「業務邏輯 MCP 工具」說明；若 MCP server 沒提供對應工具或工具失敗，仍回退一般 ReAct GUI 操作。
+- `.env.example` / `.env` 新增 `SAP_BUSINESS_TOOLS_ENABLED`、`SAP_BUSINESS_TOOLS_REGISTRY`、`SAP_BUSINESS_EXTRA_MCP_TOOLS`、`SAP_BUSINESS_DISABLED_MCP_TOOLS` 與 `FBL5N_COMPANY_CODE`。
+
 ## [0.13.1] - 2026-06-17
 
 #### Changed
