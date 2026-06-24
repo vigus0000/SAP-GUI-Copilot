@@ -36,6 +36,8 @@ from sap_agent_tools import (
     confirmed_click,
     confirmed_send_vkey,
     confirmed_handle_popup,
+    _safe_find_by_id,
+    _normalize_element_id,
 )
 from sop_step_parser import parse_sop_steps, steps_confidence, vkey_label, clean_step_instruction, StepItem
 from mcp_client import MCPClientUnavailable, get_default_sync_client
@@ -2939,19 +2941,66 @@ class SAPAgent:
 
         LLM 僅在以下情況呼叫：
         - 使用者在某步驟輸入了問題（非空白、非快捷指令）
-        - （未來）元件找不到需要 AI 輔助定位
+        - SAP 狀態列出現錯誤/警告
 
         快捷指令：
         - Enter（空）       → 確認完成，進入下一步
         - /skip 或 s        → 略過此步驟
         - /done 或 結束     → 提早結束教學
         - 任何其他文字      → 視為問題，呼叫 AI 回答後繼續
+
+        畫面切換追蹤：
+        每步完成後讀取目前畫面 fingerprint（tcode + screen_number）。
+        若切換，掃描畫面並核對下一步 element_id 是否存在。
         """
         total = len(steps)
         print(f"\n\033[90m[Study] 步驟引導模式：共 {total} 步（Enter=下一步 / /skip=略過 / /done=結束）\033[0m\n")
 
+        # 初始畫面 fingerprint
+        def _get_screen_fp() -> tuple[str, str]:
+            """回傳 (tcode, screen_number) 作為畫面識別 fingerprint。"""
+            try:
+                snap = self._study_post_tool_screen(session)
+                return (
+                    str(snap.get("tcode", "") or ""),
+                    str(snap.get("screen_number", "") or ""),
+                )
+            except Exception:
+                return ("", "")
+
+        def _element_on_screen(element_id: str) -> bool:
+            """快速檢測 element_id 是否在目前畫面上存在。"""
+            if not element_id:
+                return False
+            try:
+                norm_id = _normalize_element_id(session, element_id)
+                return _safe_find_by_id(session, norm_id) is not None
+            except Exception:
+                return False
+
+        current_fp = _get_screen_fp()
         completed = 0
-        for step in steps:
+        for idx, step in enumerate(steps):
+            # ── 畫面切換預檢（從第二步起）──────────────────────────────────
+            # 每步開始前先確認目前畫面與 SOP element_id 是否相符。
+            # 若上一步造成了畫面切換，在這裡偵測並給使用者提示。
+            if idx > 0 and step.element_id:
+                step_fp = _get_screen_fp()
+                if step_fp != current_fp:
+                    # 畫面已切換，掃描並核對
+                    tcode_new, screen_new = step_fp
+                    print(
+                        f"\n\033[90m[Study] ↪ 畫面切換至 T-Code={tcode_new} "
+                        f"Screen={screen_new}\033[0m"
+                    )
+                    current_fp = step_fp
+                    # 核對下一步 element 是否存在
+                    if not _element_on_screen(step.element_id):
+                        print(
+                            f"\033[33m[Study] ⚠ 步驟 {step.n} 元件 {step.element_id} "
+                            f"在新畫面上找不到，將切換為純文字引導。\033[0m"
+                        )
+
             print(f"\n\033[1;34m{'─' * 54}\033[0m")
             print(f"\033[1;34m  步驟 {step.n}/{total}: {step.header}\033[0m")
             print(f"\033[1;34m{'─' * 54}\033[0m")
@@ -3024,10 +3073,39 @@ class SAPAgent:
 
             completed += 1
 
-            # 使用者輸入了問題（非空白、非常見確認詞）
+            # ── 步驟完成後：更新畫面 fingerprint ─────────────────────────────
+            # 記錄執行後的畫面狀態，供下一步的切換偵測使用。
+            current_fp = _get_screen_fp()
+
+            # ── 決定是否串 AI ────────────────────────────────────────────────
+            # 預設：不串 AI，直接進入下一步。
+            # 觸發 AI 的兩種情況：
+            #   1. 使用者輸入了問題（非空白、非常見確認詞）
+            #   2. SAP 狀態列出現錯誤或警告（畫面異常）
             _confirm_words = {"ok", "好", "是", "y", "ye", "yes", "完成", ""}
-            if user_response.lower() not in _confirm_words:
-                print(f"\033[90m[Study] 問 AI...\033[0m")
+            user_has_question = user_response.lower() not in _confirm_words
+
+            # 輕量取得 status bar（不做完整掃描）
+            screen_error_text = ""
+            try:
+                compact_check = self._study_post_tool_screen(session)
+                status_bar = compact_check.get("status_bar") or {}
+                bar_type = str(status_bar.get("type", "")).upper()
+                bar_text = str(status_bar.get("text", "") or "")
+                if bar_type in ("E", "W", "A") and bar_text:
+                    screen_error_text = f"[{bar_type}] {bar_text}"
+            except Exception:
+                pass
+
+            if user_has_question or screen_error_text:
+                if screen_error_text and not user_has_question:
+                    # 畫面異常但使用者沒問題 → AI 自動解釋錯誤
+                    ai_question = f"SAP 狀態列出現訊息：{screen_error_text}\n請說明這個訊息的意思以及如何處理。"
+                    print(f"\033[33m[Study] 偵測到畫面異常：{screen_error_text}，詢問 AI...\033[0m")
+                else:
+                    ai_question = user_response
+                    print(f"\033[90m[Study] 問 AI...\033[0m")
+
                 screen_text, _ = self._screen_context_text(session, purpose="ask")
                 step_ctx = (
                     f"## 當前 SOP 步驟 ({step.n}/{total}): {step.header}\n"
@@ -3035,7 +3113,9 @@ class SAPAgent:
                     f"## SOP 說明\n{extra_context[:1500]}\n\n"
                     f"## 當前 SAP 畫面\n{screen_text[:3000]}"
                 )
-                answer = self._one_shot_ask(step_ctx, user_response)
+                if screen_error_text:
+                    step_ctx += f"\n\n## SAP 狀態列訊息\n{screen_error_text}"
+                answer = self._one_shot_ask(step_ctx, ai_question)
                 self._request_study_prompt(
                     f"AI 回覆（步驟 {step.n}/{total}）",
                     answer,

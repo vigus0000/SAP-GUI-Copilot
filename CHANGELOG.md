@@ -29,6 +29,7 @@
 - `sap_agent_tools.py` `execute_transaction()` 導航邏輯強化：若目前不在起始畫面（非 `SESSION_MANAGER` / `S000`），且 T-Code 未以 `/` 開頭，自動加上 `/n` 前綴，避免在已開啟的交易中直接送裸 T-Code 造成跳轉失敗。
 - `sap_login.py` 重構為 function-based 架構：新增 `_env()`、`_require_env()`、`_open_sap_logon()`、`_get_sap_application()`、`_open_connection()` 輔助函式；登入失敗時提供更詳細的錯誤訊息與 `.env` 設定提示；支援 `SAP_CONNECTION` 新欄位（相容舊 `connection=`）；SAP Logon 啟動改用 `subprocess.Popen([path])` 並驗證路徑存在。
 - `llm_brain.py` Study Mode 新增 `from sop_step_parser import ...` 整合，利用解析器對 SOP 步驟做信心度評估與格式化，提升引導品質。
+- `llm_brain.py` Study Mode Step Runner 新增**畫面切換追蹤**：每步執行前記錄 `(tcode, screen_number)` fingerprint，步驟完成後立即更新；若偵測到切換，自動印出切換通知（`↪ 畫面切換至 T-Code=... Screen=...`）並用 `_element_on_screen()` 核對下一步的 `element_id` 是否存在於新畫面，若不存在則提早警告並切換為純文字引導。
 
 #### Fixed
 - 修正 Windows CJK 路徑（如桌面含中文的使用者名稱）下，`uv` 啟動 MCP server 時 `site.py` 因 cp950 解碼失敗而崩潰的問題。
