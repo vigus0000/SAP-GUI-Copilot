@@ -6,6 +6,35 @@
 
 ---
 
+## [0.15.0] - 2026-06-24
+
+#### Added
+- 新增 `sap_skill_library.py` SAP 模組知識庫（`SAP_MODULES`）：預建 MM（物料管理）、SD（銷售配銷）、FI（財務會計）模組的交易碼對應、關鍵詞與建議 skill 清單，供 `/guide`、`/study` 等入口依模組自動推薦學習路徑。
+- 新增 `sop_step_parser.py` SOP 步驟解析器：`parse_sop_steps()`、`steps_confidence()`、`vkey_label()`、`clean_step_instruction()` 等工具，供 Study Mode 將 Markdown SOP 拆解為結構化 `StepItem`，支援信心度評估與步驟清單格式化。
+- 新增 `sap_monitor.py` Grid cell 補抓：`_read_grid_view_cells()` 與 `_collect_grid_cells()`，可在 MCP monitor 模式下用 COM 補讀 `GuiGridView` 的儲存格內容（上限 `MAX_GRID_ROWS=100`、`MAX_GRID_COLS=30`），解決 VA01 等畫面 KUNNR 等深層欄位在 MCP 模式下遺漏的問題。
+- 新增 `llm_brain.py` Study Mode 專用畫面快照方法 `_study_post_tool_screen()`：工具執行後只回傳 tcode / title / screen_number / status_bar 與錯誤時的前 10 個可改欄位，避免 context 膨脹；MCP path 優先使用 `sap_get_screen_info`，失敗時回退 legacy COM scan。
+- 新增 `STUDY_MAX_ITERATIONS` 環境變數，控制 Study Mode 每輪最大迭代次數（預設 20），與 Auto Mode 獨立設定。
+- 新增 `.mcp.json`、`PRESENTATION.md`、`PROJECT_OVERVIEW.md`、`UPDATES_v0.14.md` 文件。
+- 新增 recordings：`ME21N.json`、`ME51N.json`、`ME5A.json`。
+- 新增 skills：`F-28`、`F-53`、`FBL1N`、`FBL5N`、`MB51`、`ME21N`、`ME2L`、`ME2M`、`ME51N`、`ME5A`、`MIGO`、`MIR6`、`MIRO`、`MM01`、`MMBE`、`VA01`、`VA02`、`VA05`、`VF01`、`VF03`、`VF05`、`VL01N`、`VL02N`、`VL06F`。
+
+#### Changed
+- `mcp_client.py` Windows 中文路徑修正：在 Windows 且未設定 `MCP_SAP_LOCAL_COMMAND` 時，若 `external/mcp-sap-gui/.venv/Scripts/python.exe` 存在，改以 venv Python 搭配 `-X utf8` 直接啟動 server，繞過 `uv` 在 CJK 使用者名稱路徑下 site.py decode 崩潰的問題。
+- `mcp_client.py` 新增 `_fix_venv_pth_files()`：將 uv 寫入的 editable-install `.pth` 絕對非 ASCII 路徑轉換為相對路徑，提升跨環境相容性。
+- `mcp_client.py` `capture_mcp()` 新增 `session` 參數：MCP monitor 模式下同時用 COM 補讀 `capture_editable_fields()`，MCP 已有的欄位維持優先，COM 只補缺漏欄位，提升 monitor 欄位覆蓋率。
+- `sap_recorder.py` SOP 壓縮邏輯優化：`FIELD_DEFAULT` 事件不再合入 SOP steps（`NOISY_EVENT_TYPES`），`system_default=True` 的事件也一律跳過，避免 SAP 系統預設值污染錄製內容；`FIELD_CHANGE` 與 `FIELD_DEFAULT` 分離處理，前者才顯示 `short_id = "value"` 格式。
+- `sap_recorder.py` Grid row ID 解析改善：`#r` 後綴的 element ID 改以 `rsplit("#r", 1)` 取得列索引，提升 ALV Grid 錄製準確度。
+- `sap_monitor.py` 畫面快照過濾：Tab 標籤元件（`/tabs`、`/tabp`）不再記入 `field_values`，避免 Tab caption 污染欄位差異偵測。
+- `sap_agent_tools.py` `visualize_element()` 高亮停留時間從 1.2 秒縮短至 0.5 秒，加快 Study Mode 引導節奏；預設 `duration_seconds` 同步調整。
+- `sap_agent_tools.py` `execute_transaction()` 導航邏輯強化：若目前不在起始畫面（非 `SESSION_MANAGER` / `S000`），且 T-Code 未以 `/` 開頭，自動加上 `/n` 前綴，避免在已開啟的交易中直接送裸 T-Code 造成跳轉失敗。
+- `sap_login.py` 重構為 function-based 架構：新增 `_env()`、`_require_env()`、`_open_sap_logon()`、`_get_sap_application()`、`_open_connection()` 輔助函式；登入失敗時提供更詳細的錯誤訊息與 `.env` 設定提示；支援 `SAP_CONNECTION` 新欄位（相容舊 `connection=`）；SAP Logon 啟動改用 `subprocess.Popen([path])` 並驗證路徑存在。
+- `llm_brain.py` Study Mode 新增 `from sop_step_parser import ...` 整合，利用解析器對 SOP 步驟做信心度評估與格式化，提升引導品質。
+
+#### Fixed
+- 修正 Windows CJK 路徑（如桌面含中文的使用者名稱）下，`uv` 啟動 MCP server 時 `site.py` 因 cp950 解碼失敗而崩潰的問題。
+- 修正 `sap_login.py` 使用 `subprocess.Popen(os.getenv(...))` 傳入字串在路徑含空白時解析異常的問題，改為傳入 list。
+- 修正 Monitor 在 MCP 模式下遺漏 VA01 客戶編號（KUNNR）等非 input 欄位的問題，透過 COM 補讀 Grid cells 解決。
+
 ## [0.14.0]
 
 #### Added

@@ -31,6 +31,8 @@ from mcp_client import get_default_sync_client
 
 
 MAX_WINDOW_SCAN = 6
+MAX_GRID_ROWS = 100   # 每個 Grid 最多掃幾行
+MAX_GRID_COLS = 30    # 每行最多掃幾欄
 
 
 def env_enabled(name, default="true"):
@@ -174,6 +176,10 @@ def _extract_mcp_field_values(value, max_fields=300):
         )
         if not element_id:
             continue
+        # 過濾 Tab 頁籤的 caption（tabsTAXI_TABSTRIP / tabpT）——這是頁籤文字，不是使用者輸入
+        short_eid = _short_element_id(element_id)
+        if "/tabs" in short_eid or "/tabp" in short_eid:
+            continue
         type_name = str(item.get("type") or item.get("control_type") or "")
         if type_name and not any(
             marker in type_name
@@ -316,12 +322,13 @@ class ScreenSnapshot:
         return snap
 
     @staticmethod
-    def capture_mcp(mcp_client, tool_names=None):
+    def capture_mcp(mcp_client, tool_names=None, session=None):
         """
         從 MCP server 擷取當前畫面快照。
 
         mcp-sap-gui 的回傳格式可能依版本調整，因此這裡採寬鬆解析：
         JSON 優先；若只有文字，則用 regex 擷取 T-Code / screen / title。
+        session 若提供，會額外用 COM 補捕 GuiGridView cell 值（MCP 不回傳 Grid 資料）。
         """
         snap = ScreenSnapshot()
         tool_names = set(tool_names or [])
@@ -418,6 +425,17 @@ class ScreenSnapshot:
                 raw_text.encode("utf-8", errors="ignore")
             ).hexdigest()[:12]
 
+        # MCP 不回傳深層欄位（如 VA01 的 KUNNR）及 Grid cell；用 COM 補抓
+        if session is not None:
+            try:
+                com_fields = _capture_editable_fields(session, max_fields=300)
+                # COM 補充 MCP 沒有的欄位；MCP 已有的不覆蓋（MCP 較準確）
+                for k, v in com_fields.items():
+                    if k not in snap.field_values:
+                        snap.field_values[k] = v
+            except Exception:
+                pass
+
         return snap
 
 
@@ -457,11 +475,56 @@ def _capture_editable_fields(session, max_fields=200):
         try:
             window = session.FindById(window_id)
             _collect_fields(window, fields, max_fields)
+            _collect_grid_cells(window, fields, max_fields)
         except Exception:
             if wnd_idx > 0:
                 break
 
     return fields
+
+
+def _read_grid_view_cells(grid, fields, max_fields):
+    """讀取 GuiGridView (ALV Grid) 的所有可見 cell 值。"""
+    try:
+        elem_id = _short_element_id(_safe_get_attr(grid, "Id", "") or "")
+        if not elem_id:
+            return
+        row_count = int(_safe_get_attr(grid, "RowCount", 0) or 0)
+        cols = list(grid.ColumnOrder)
+        for row in range(min(row_count, MAX_GRID_ROWS)):
+            for col in cols[:MAX_GRID_COLS]:
+                if len(fields) >= max_fields:
+                    return
+                try:
+                    value = grid.GetCellValue(row, col)
+                    if value:
+                        fields[f"{elem_id}#r{row}#{col}"] = str(value)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def _collect_grid_cells(element, fields, max_fields, depth=0):
+    """遞迴找 GuiGridView 並捕捉 cell 值（COM 路徑專用）。"""
+    if depth > 10 or len(fields) >= max_fields:
+        return
+    try:
+        children = element.Children
+        count = children.Count
+    except Exception:
+        return
+    for i in range(count):
+        if len(fields) >= max_fields:
+            return
+        try:
+            child = children(i)
+            type_name = _safe_get_attr(child, "Type", "") or ""
+            if type_name == "GuiGridView":
+                _read_grid_view_cells(child, fields, max_fields)
+            _collect_grid_cells(child, fields, max_fields, depth + 1)
+        except Exception:
+            continue
 
 
 def _collect_fields(element, fields, max_fields, depth=0):
@@ -748,7 +811,7 @@ class SAPMonitor:
             except Exception as attach_error:
                 print(f"\033[33m[Monitor] MCP SAP session attach 警告: {attach_error}\033[0m")
 
-            self._last_snapshot = ScreenSnapshot.capture_mcp(self.mcp_client, tool_names)
+            self._last_snapshot = ScreenSnapshot.capture_mcp(self.mcp_client, tool_names, session=self.session)
             if self._last_snapshot.capture_error and not (
                 self._last_snapshot.tcode
                 or self._last_snapshot.screen_number
@@ -768,7 +831,7 @@ class SAPMonitor:
 
             while not self._stop_event.is_set():
                 try:
-                    new_snapshot = ScreenSnapshot.capture_mcp(self.mcp_client, tool_names)
+                    new_snapshot = ScreenSnapshot.capture_mcp(self.mcp_client, tool_names, session=self.session)
                     if new_snapshot.capture_error:
                         self._capture_failures += 1
                         if self._capture_failures in (1, 5, 20) or self._capture_failures % 100 == 0:

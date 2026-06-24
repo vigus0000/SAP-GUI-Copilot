@@ -1645,7 +1645,7 @@ def _focus_element(element):
     return False
 
 
-def visualize_element(session, element_id: str, duration_seconds: float = 1.2, set_focus: bool = True) -> dict:
+def visualize_element(session, element_id: str, duration_seconds: float = 0.5, set_focus: bool = True) -> dict:
     """Focus and highlight a SAP GUI element for guided Study Mode."""
     element_id = _normalize_element_id(session, element_id)
     try:
@@ -1935,7 +1935,7 @@ def guide_user_action(
         viz_result = visualize_element(
             session,
             element_id=target_id,
-            duration_seconds=1.5,
+            duration_seconds=0.5,
             set_focus=True,
         )
     current_value = target.get("current_value", "")
@@ -3162,6 +3162,17 @@ def set_tcode(session, tcode: str) -> dict:
         dict: 操作結果
     """
     try:
+        raw_tcode = str(tcode or "").strip()
+        current_transaction = ""
+        try:
+            current_transaction = str(getattr(session.Info, "Transaction", "") or "").upper()
+        except Exception:
+            current_transaction = ""
+        if raw_tcode and not raw_tcode.startswith("/") and current_transaction not in {"", "SESSION_MANAGER", "S000"}:
+            tcode = f"/n{raw_tcode}"
+        else:
+            tcode = raw_tcode
+
         okcode = session.FindById("wnd[0]/tbar[0]/okcd")
         okcode.Text = tcode
         window = session.FindById("wnd[0]")

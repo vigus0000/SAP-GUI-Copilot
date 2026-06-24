@@ -37,11 +37,8 @@ from sap_agent_tools import (
     confirmed_send_vkey,
     confirmed_handle_popup,
 )
+from sop_step_parser import parse_sop_steps, steps_confidence, vkey_label, clean_step_instruction, StepItem
 from mcp_client import MCPClientUnavailable, get_default_sync_client
-from sap_business_tools import (
-    format_business_tools_prompt,
-    get_business_mcp_tool_names,
-)
 
 
 def env_enabled(name, default="true"):
@@ -61,6 +58,8 @@ DEFAULT_MODEL = default_model_for_provider(DEFAULT_LLM_PROVIDER)
 
 # 最大 ReAct 迴圈次數（防止無限迴圈）
 MAX_ITERATIONS = int(os.getenv("COPILOT_MAX_ITERATIONS", "6"))
+# Study Mode 允許更多步驟，且與 Auto Mode 分開設定
+STUDY_MAX_ITERATIONS = int(os.getenv("STUDY_MAX_ITERATIONS", "20"))
 
 CONVERSATION_HISTORY_LIMIT = int(os.getenv("COPILOT_HISTORY_LIMIT", "14"))
 EDITOR_CONTEXT_MAX_CHARS = int(os.getenv("EDITOR_CONTEXT_MAX_CHARS", "12000"))
@@ -115,7 +114,6 @@ MCP_EXPOSE_DISCOVERY_TO_LLM = env_enabled("MCP_EXPOSE_DISCOVERY_TO_LLM", "false"
 MCP_POPUP_USE_POPUP_TOOL_ONLY = env_enabled("MCP_POPUP_USE_POPUP_TOOL_ONLY", "true")
 MCP_ATTACH_ELEMENTS_AFTER_NAV = env_enabled("MCP_ATTACH_ELEMENTS_AFTER_NAV", "true")
 MCP_ATTACH_ELEMENTS_ON_FIELD_FAILURE = env_enabled("MCP_ATTACH_ELEMENTS_ON_FIELD_FAILURE", "true")
-AUTO_CLEAR_STALE_SELECTION_FIELDS = env_enabled("AUTO_CLEAR_STALE_SELECTION_FIELDS", "true")
 MCP_READ_TABLES_IN_CONTEXT = env_enabled("MCP_READ_TABLES_IN_CONTEXT", "true")
 MCP_READ_SHELLS_IN_CONTEXT = env_enabled("MCP_READ_SHELLS_IN_CONTEXT", "true")
 MCP_TABLE_CONTEXT_MAX_TABLES = int(os.getenv("MCP_TABLE_CONTEXT_MAX_TABLES", "3"))
@@ -151,9 +149,6 @@ MCP_FAST_SCREEN_TYPE_FILTER = os.getenv(
         "GuiOkCodeField",
     ]),
 )
-SAP_MACRO_SCREEN_MAX_DEPTH = int(os.getenv("SAP_MACRO_SCREEN_MAX_DEPTH", str(max(MCP_FAST_SCREEN_MAX_DEPTH, MCP_EVIDENCE_SCREEN_MAX_DEPTH))))
-SAP_MACRO_SCREEN_TYPE_FILTER = os.getenv("SAP_MACRO_SCREEN_TYPE_FILTER", MCP_EVIDENCE_SCREEN_TYPE_FILTER)
-SAP_MACRO_SCREEN_CHANGEABLE_ONLY = env_enabled("SAP_MACRO_SCREEN_CHANGEABLE_ONLY", "false")
 MCP_CORE_TOOL_NAMES = set(env_list(
     "MCP_SAP_CORE_TOOLS",
     ",".join([
@@ -189,12 +184,11 @@ MCP_CORE_TOOL_NAMES = set(env_list(
         "sap_handle_popup",
         "sap_get_toolbar_buttons",
         "sap_read_shell_content",
+        "sap_analyze_delivery_block",
         "sap_screenshot",
         "sap_disconnect",
     ]),
 ))
-MCP_BUSINESS_TOOL_NAMES = get_business_mcp_tool_names()
-MCP_CORE_TOOL_NAMES.update(MCP_BUSINESS_TOOL_NAMES)
 MCP_DYNAMIC_TOOL_GROUPS = {
     "alv": {
         "sap_get_alv_toolbar",
@@ -297,11 +291,10 @@ SYSTEM_PROMPT_AUTO = """你是一個專業的 SAP GUI 操作助手。你可以�
 - 處理彈窗時優先使用 handle_popup；例如填寫彈窗「標題」後按儲存，使用 handle_popup(action="save", field_label="標題", value="...")
 - 如果 active_popup 的 title 是「錯誤」或 messages 有錯誤文字，先讀 messages 判斷原因；通常要先 handle_popup(action="ok") 關閉最上層錯誤，再依下一層彈窗的 fields 補齊空白/焦點欄位
 - screen JSON 中的 fields 會把欄位 label 與元件 ID 配對；填欄位時優先使用 fields 裡的 id 或 handle_popup(field_label=...)
-- SAP 選擇畫面常會保留上次查詢條件。執行清單/查詢/庫存/報表前，必須比對目前非空欄位值與使用者本次需求；若欄位值沒有被使用者指定且會限制結果，必須用空字串清空該欄位，再按 Enter/F8/Execute。例如使用者說「查詢工廠 1710 的所有庫存」，畫面物料欄位仍有 `MAT_001`，必須同時清空物料欄位並填入工廠 `1710`，不能沿用 `MAT_001`。
-- 同一選擇畫面要填入條件並清空殘留條件時，優先用批次欄位工具一次送出，例如 `sap_set_batch_fields(fields={物料欄位: "", 工廠欄位: "1710"}, validate=false)`；不要只填使用者提到的欄位。
 - 如果 fields 的 type 是 GuiComboBox、dropdown=true 或含 options，代表下拉式選單；必須使用 select_combo，或在彈窗中用 handle_popup 依 label 選值，不要把它當一般文字欄位 set_text
 - 下拉式選單若有 options，優先用 option key；沒有 key 時才用顯示文字
 - 使用 MCP 工具時，如果有 sap_set_fields_and_enter，且同一畫面要填欄位後按 Enter 驗證，優先一次呼叫 sap_set_fields_and_enter(fields={id: value, ...})；不要拆成 sap_set_batch_fields + sap_send_key
+- 需要切換 SAP 交易時，優先使用 sap_execute_transaction(tcode)。不要用 sap_set_field/set_text 直接把裸 T-Code 寫進 OK Code；若必須使用 OK Code 且目前不在起始畫面，交易碼必須加 `/n`，例如 `/nVL10A`。
 - 如果只需要填多個欄位但暫不送出，才使用 sap_set_batch_fields(fields={id: value, ...}, validate=false)，不要逐欄 sap_set_field
 - 如果畫面是彈窗 table row 選擇後要按繼續，且有 sap_select_popup_table_row_and_confirm，優先一次呼叫它；不要拆成 sap_select_table_row + sap_handle_popup
 - 不要把 save/post/delete/confirm/release 等敏感提交操作放進批次欄位動作；這些操作仍必須走確認或由使用者明確允許
@@ -330,12 +323,6 @@ SYSTEM_PROMPT_AUTO = """你是一個專業的 SAP GUI 操作助手。你可以�
 - sbar 是狀態列，顯示操作結果訊息
 - VKey 0=Enter, 3=F3(返回), 8=F8(執行), 11=Ctrl+S(儲存), 12=F12(取消)
 """
-BUSINESS_TOOLS_PROMPT_SECTION = format_business_tools_prompt()
-if BUSINESS_TOOLS_PROMPT_SECTION:
-    SYSTEM_PROMPT_AUTO = SYSTEM_PROMPT_AUTO.replace(
-        "\n## SAP 基礎知識",
-        f"\n{BUSINESS_TOOLS_PROMPT_SECTION}\n\n## SAP 基礎知識",
-    )
 
 # System Prompt - Ask Mode (僅回答問題，不執行操作)
 SYSTEM_PROMPT_ASK = """你是一個專業的 SAP GUI 問答助手。你**只回答問題，絕對不執行任何操作**。
@@ -799,366 +786,6 @@ class SAPAgent:
                             elements.extend(self._mcp_elements_from_text(text))
                 return elements
         return []
-
-    @staticmethod
-    def _short_sap_element_id(element_id):
-        text = str(element_id or "").strip()
-        if not text:
-            return ""
-        match = re.search(r"(wnd\[\d+\].*)$", text)
-        if match:
-            return match.group(1)
-        return text
-
-    @staticmethod
-    def _truthy_value(value):
-        if isinstance(value, bool):
-            return value
-        if value is None:
-            return False
-        return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-    @staticmethod
-    def _selection_field_semantic(blob):
-        text = str(blob or "").lower()
-        patterns = (
-            ("material", ("matnr", "material", "物料", "料號", "商品")),
-            ("plant", ("werks", "plant", "工廠", "廠別")),
-            ("storage_location", ("lgort", "storage", "stor", "儲位", "庫存地點", "倉庫")),
-            ("batch", ("charg", "batch", "批次")),
-            ("material_type", ("mtart", "material type", "物料類型")),
-            ("material_group", ("matkl", "wgb", "material group", "物料群組", "物料組")),
-            ("customer", ("kunnr", "kunde", "customer", "payer", "付款人", "客戶")),
-            ("vendor", ("lifnr", "vendor", "supplier", "供應商", "廠商")),
-            ("company_code", ("bukrs", "company code", "公司代碼")),
-            ("sales_org", ("vkorg", "sales org", "銷售組織")),
-            ("distribution_channel", ("vtweg", "distribution", "配銷通路", "分銷通路")),
-            ("division", ("spart", "division", "部門")),
-            ("purchasing_org", ("ekorg", "purchasing org", "採購組織")),
-            ("purchasing_group", ("ekgrp", "purchasing group", "採購群組", "採購組")),
-            ("movement_type", ("bwart", "movement type", "移動類型", "異動類型")),
-            ("document", ("banfn", "ebeln", "vbeln", "belnr", "請購單", "採購單", "銷售訂單", "請款", "文件號")),
-            ("date", ("datum", "date", "fkdat", "budat", "erdat", "eindt", "日期", "交貨日", "文件日期")),
-        )
-        for semantic, needles in patterns:
-            if any(needle in text for needle in needles):
-                return semantic
-        return ""
-
-    @staticmethod
-    def _selection_semantic_allows_clear(semantic, user_message):
-        if semantic == "date":
-            return any(token in str(user_message or "").lower() for token in (
-                "all",
-                "any",
-                "不限",
-                "不限制",
-                "全部",
-                "所有",
-                "清空日期",
-                "不限定日期",
-            ))
-        return semantic in {
-            "material",
-            "plant",
-            "storage_location",
-            "batch",
-            "material_type",
-            "material_group",
-            "customer",
-            "vendor",
-            "company_code",
-            "sales_org",
-            "distribution_channel",
-            "division",
-            "purchasing_org",
-            "purchasing_group",
-            "movement_type",
-            "document",
-        }
-
-    @staticmethod
-    def _selection_semantic_mentioned(semantic, user_message):
-        text = str(user_message or "").lower()
-        keywords = {
-            "material": ("material", "物料", "料號", "商品"),
-            "plant": ("plant", "工廠", "廠別"),
-            "storage_location": ("storage", "stor", "儲位", "庫存地點", "倉庫"),
-            "batch": ("batch", "批次"),
-            "material_type": ("物料類型", "material type"),
-            "material_group": ("物料群組", "物料組", "material group"),
-            "customer": ("customer", "payer", "付款人", "客戶"),
-            "vendor": ("vendor", "supplier", "供應商", "廠商"),
-            "company_code": ("company code", "公司代碼"),
-            "sales_org": ("sales org", "銷售組織"),
-            "distribution_channel": ("distribution", "配銷通路", "分銷通路"),
-            "division": ("division", "部門"),
-            "purchasing_org": ("purchasing org", "採購組織"),
-            "purchasing_group": ("purchasing group", "採購群組", "採購組"),
-            "movement_type": ("movement type", "移動類型", "異動類型"),
-            "document": ("請購單", "採購單", "銷售訂單", "請款", "文件號", "單號"),
-            "date": ("date", "日期", "交貨日", "文件日期"),
-        }
-        return any(keyword in text for keyword in keywords.get(semantic, ()))
-
-    def _selection_field_from_element(self, element):
-        if not isinstance(element, dict):
-            return None
-
-        element_id = self._short_sap_element_id(
-            element.get("id")
-            or element.get("element_id")
-            or element.get("field_id")
-            or element.get("Id")
-        )
-        if not element_id:
-            return None
-
-        element_type = str(element.get("type") or element.get("Type") or "").strip()
-        if element_type and not any(token in element_type for token in (
-            "TextField",
-            "CTextField",
-            "ComboBox",
-            "OkCodeField",
-        )):
-            return None
-
-        if "changeable" in element and not self._truthy_value(element.get("changeable")):
-            return None
-        if "visible" in element and not self._truthy_value(element.get("visible")):
-            return None
-
-        value = element.get("value")
-        if value in (None, ""):
-            value = element.get("text")
-        value_text = str(value or "").strip()
-        if not value_text or value_text.lower() in {"true", "false", "none", "null"}:
-            return None
-
-        label = str(
-            element.get("label")
-            or element.get("name")
-            or element.get("Name")
-            or element.get("tooltip")
-            or element.get("text_label")
-            or ""
-        ).strip()
-        name = str(element.get("name") or element.get("Name") or "").strip()
-        blob = " ".join([
-            element_id,
-            element_type,
-            name,
-            label,
-            str(element.get("tooltip") or ""),
-        ])
-        semantic = self._selection_field_semantic(blob)
-        if not semantic:
-            return None
-
-        return {
-            "id": element_id,
-            "type": element_type,
-            "name": name,
-            "label": label or name or element_id,
-            "value": value_text,
-            "semantic": semantic,
-        }
-
-    def _selection_fields_from_payload(self, payload):
-        fields = []
-        seen = set()
-
-        def visit(value, depth=0):
-            if depth > 7:
-                return
-            if isinstance(value, dict):
-                field = self._selection_field_from_element(value)
-                if field and field["id"] not in seen:
-                    seen.add(field["id"])
-                    fields.append(field)
-                for child_key in ("elements", "fields", "items", "children", "data", "result", "content"):
-                    child = value.get(child_key)
-                    if child is not None:
-                        visit(child, depth + 1)
-            elif isinstance(value, list):
-                for item in value:
-                    visit(item, depth + 1)
-
-        visit(payload)
-        return fields
-
-    def _auto_selection_carryover_guard(self, screen_text, user_message):
-        if not AUTO_CLEAR_STALE_SELECTION_FIELDS:
-            return "", {}, {}
-
-        candidates = []
-        seen = set()
-        for title, body in self._mcp_context_sections(screen_text):
-            parsed = self._parse_mcp_json_text(body)
-            for field in self._selection_fields_from_payload(parsed):
-                if field["id"] not in seen:
-                    seen.add(field["id"])
-                    candidates.append(field)
-            if "screen_elements" in title or "fast filtered" in title:
-                for element in self._mcp_elements_from_text(body):
-                    field = self._selection_field_from_element(element)
-                    if field and field["id"] not in seen:
-                        seen.add(field["id"])
-                        candidates.append(field)
-
-        if not candidates:
-            parsed = self._parse_mcp_json_text(screen_text)
-            for field in self._selection_fields_from_payload(parsed):
-                if field["id"] not in seen:
-                    seen.add(field["id"])
-                    candidates.append(field)
-
-        if not candidates:
-            return "", {}, {}
-
-        user_upper = str(user_message or "").upper()
-        stale = []
-        clear_fields = {}
-        required_rewrites = {}
-        for field in candidates:
-            value = field["value"]
-            if value and str(value).upper() in user_upper:
-                continue
-            semantic = field["semantic"]
-            mentioned = self._selection_semantic_mentioned(semantic, user_message)
-            can_clear = self._selection_semantic_allows_clear(semantic, user_message)
-            item = dict(field)
-            item["requires_rewrite"] = bool(mentioned)
-            item["auto_clear"] = bool(can_clear and not mentioned)
-            stale.append(item)
-            if mentioned:
-                required_rewrites[field["id"]] = item
-            elif can_clear and field["id"] not in clear_fields:
-                clear_fields[field["id"]] = ""
-
-        if not stale:
-            return "", {}, {}
-
-        lines = [
-            "## Auto Selection Carryover Guard",
-            "目前畫面有非空選擇條件沒有出現在本次使用者需求中。這些可能是 SAP 保留的上次查詢條件；執行查詢前需確認是否清空，避免沿用舊限制造成結果錯誤。",
-            "可自動清空的欄位請在本輪批次填欄位時一併設為空字串；若即將按 Execute/F8/Enter，系統也會先嘗試自動 pre-clear。",
-            "`must-rewrite` 代表使用者本次提到該類條件但畫面值不同，必須先填成本次值，不能直接清空後送出。",
-        ]
-        for field in stale[:12]:
-            if field.get("requires_rewrite"):
-                marker = "must-rewrite"
-            else:
-                marker = "auto-clear" if field.get("auto_clear") else "review-only"
-            lines.append(
-                f"- {marker}: {field['label']} ({field['id']}) = {field['value']} [{field['semantic']}]"
-            )
-        return "\n".join(lines), clear_fields, required_rewrites
-
-    @staticmethod
-    def _normalize_tool_name(name):
-        return str(name or "").strip()
-
-    def _tool_field_write_ids(self, tool_name, tool_args):
-        name = self._normalize_tool_name(tool_name)
-        args = tool_args if isinstance(tool_args, dict) else {}
-        ids = set()
-        if name in {"sap_set_batch_fields", "sap_set_fields_and_enter"}:
-            fields = args.get("fields")
-            if isinstance(fields, dict):
-                ids.update(
-                    self._short_sap_element_id(field_id)
-                    for field_id in fields.keys()
-                    if self._short_sap_element_id(field_id)
-                )
-        elif name in {"sap_set_field", "set_text", "sap_enter_text", "sap_set_text"}:
-            field_id = (
-                args.get("field_id")
-                or args.get("element_id")
-                or args.get("id")
-            )
-            short_id = self._short_sap_element_id(field_id)
-            if short_id:
-                ids.add(short_id)
-        elif name in {"sap_select_combobox_entry", "sap_select_checkbox", "sap_select_radio_button", "select_combo", "set_checkbox"}:
-            field_id = (
-                args.get("element_id")
-                or args.get("field_id")
-                or args.get("combobox_id")
-                or args.get("checkbox_id")
-                or args.get("radio_id")
-                or args.get("id")
-            )
-            short_id = self._short_sap_element_id(field_id)
-            if short_id:
-                ids.add(short_id)
-        return ids
-
-    def _apply_auto_selection_clears_to_tool_args(self, tool_name, tool_args, clear_fields, required_rewrites=None):
-        if not clear_fields and not required_rewrites:
-            return tool_args
-        args = dict(tool_args or {})
-        written_ids = self._tool_field_write_ids(tool_name, args)
-        for field_id in list(clear_fields.keys()):
-            if self._short_sap_element_id(field_id) in written_ids:
-                clear_fields.pop(field_id, None)
-        if isinstance(required_rewrites, dict):
-            for field_id in list(required_rewrites.keys()):
-                if self._short_sap_element_id(field_id) in written_ids:
-                    required_rewrites.pop(field_id, None)
-
-        if self._normalize_tool_name(tool_name) not in {"sap_set_batch_fields", "sap_set_fields_and_enter"}:
-            return args
-
-        fields = dict(args.get("fields") or {})
-        existing_ids = {
-            self._short_sap_element_id(field_id)
-            for field_id in fields.keys()
-        }
-        for field_id, value in list(clear_fields.items()):
-            short_id = self._short_sap_element_id(field_id)
-            if short_id and short_id not in existing_ids:
-                fields[field_id] = value
-            clear_fields.pop(field_id, None)
-
-        args["fields"] = fields
-        if self._normalize_tool_name(tool_name) == "sap_set_batch_fields":
-            args.setdefault("validate", False)
-        args.setdefault("skip_readonly", True)
-        return args
-
-    def _tool_is_query_submit(self, tool_name, tool_args):
-        name = self._normalize_tool_name(tool_name)
-        args = tool_args if isinstance(tool_args, dict) else {}
-        if name in {"sap_send_key", "sap_send_vkey", "send_vkey"}:
-            key = args.get("key", args.get("vkey", ""))
-            key_text = str(key).strip().lower()
-            return key_text in {"0", "8", "enter", "f8", "execute"}
-        if name in {"sap_press_button", "sap_click_button", "click", "confirmed_click"}:
-            blob = json.dumps(args, ensure_ascii=False).lower()
-            return any(token in blob for token in ("execute", "執行", "btn[8]", "/8", "f8"))
-        return False
-
-    def _run_auto_selection_preclear(self, session, clear_fields):
-        if not clear_fields:
-            return None
-        if not self._mcp_tool_available("sap_set_batch_fields"):
-            return {
-                "success": False,
-                "action": "auto_selection_preclear",
-                "error": "sap_set_batch_fields unavailable",
-                "fields": dict(clear_fields),
-            }
-        fields = dict(clear_fields)
-        clear_fields.clear()
-        result = self._execute_primary_tool_call(session, "sap_set_batch_fields", {
-            "fields": fields,
-            "validate": False,
-            "skip_readonly": True,
-        })
-        if result.get("backend") == "mcp":
-            self._remember_mcp_field_writes(result)
-        return result
 
     def _mcp_context_sections(self, text):
         sections = []
@@ -2145,7 +1772,6 @@ class SAPAgent:
 
     def _legacy_tool_name_for_mcp(self, tool_name):
         aliases = {
-            "sap_execute_transaction": "set_tcode",
             "sap_set_text": "set_text",
             "sap_set_field": "set_text",
             "sap_enter_text": "set_text",
@@ -2153,7 +1779,6 @@ class SAPAgent:
             "sap_select_dropdown": "select_combo",
             "sap_click": "click",
             "sap_press_button": "click",
-            "sap_select_tab": "click",
             "sap_send_vkey": "send_vkey",
             "sap_send_key": "send_vkey",
             "sap_set_tcode": "set_tcode",
@@ -2161,16 +1786,12 @@ class SAPAgent:
             "sap_handle_popup": "handle_popup",
             "sap_read_checkbox": "read_checkbox",
             "sap_set_checkbox": "set_checkbox",
-            "sap_select_checkbox": "set_checkbox",
-            "sap_select_radio_button": "set_checkbox",
-            "sap_select_combobox_entry": "select_combo",
             "sap_select_table_row": "select_table_row",
             "sap_get_screen_elements": "scan_sap_screen",
             "sap_get_screen": "scan_sap_screen",
             "sap_scan_screen": "scan_sap_screen",
             "sap_read_editor_text": "read_editor_text",
             "sap_set_editor_text": "set_editor_text",
-            "sap_set_textedit": "set_editor_text",
             "sap_visualize_element": "visualize_element",
             "sap_set_focus": "visualize_element",
         }
@@ -2189,181 +1810,22 @@ class SAPAgent:
         if legacy_tool_name == "set_text":
             if "text" in normalized and "value" not in normalized:
                 normalized["value"] = normalized.pop("text")
-            if "field_id" in normalized and "element_id" not in normalized:
-                normalized["element_id"] = normalized.pop("field_id")
         elif legacy_tool_name == "select_combo":
             if "text" in normalized and "value" not in normalized and "key" not in normalized:
                 normalized["value"] = normalized["text"]
-            if "key_or_value" in normalized and "value" not in normalized and "key" not in normalized:
-                normalized["value"] = normalized.pop("key_or_value")
-            if "combobox_id" in normalized and "element_id" not in normalized:
-                normalized["element_id"] = normalized.pop("combobox_id")
         elif legacy_tool_name == "send_vkey":
             if "key" in normalized and "vkey" not in normalized:
-                normalized["vkey"] = self._sap_key_to_vkey(normalized.pop("key"))
+                normalized["vkey"] = normalized.pop("key")
         elif legacy_tool_name == "set_tcode":
             if "transaction" in normalized and "tcode" not in normalized:
                 normalized["tcode"] = normalized.pop("transaction")
             if "transaction_code" in normalized and "tcode" not in normalized:
                 normalized["tcode"] = normalized.pop("transaction_code")
-            if "tcode" not in normalized and "code" in normalized:
-                normalized["tcode"] = normalized.pop("code")
         elif legacy_tool_name == "set_checkbox":
             if "checked" in normalized and "selected" not in normalized:
                 normalized["selected"] = normalized.pop("checked")
-            if "checkbox_id" in normalized and "element_id" not in normalized:
-                normalized["element_id"] = normalized.pop("checkbox_id")
-            if "radio_id" in normalized and "element_id" not in normalized:
-                normalized["element_id"] = normalized.pop("radio_id")
-            if "selected" not in normalized:
-                normalized["selected"] = True
-        elif legacy_tool_name == "click":
-            if "button_id" in normalized and "element_id" not in normalized:
-                normalized["element_id"] = normalized.pop("button_id")
-            if "tab_id" in normalized and "element_id" not in normalized:
-                normalized["element_id"] = normalized.pop("tab_id")
-        elif legacy_tool_name == "set_editor_text":
-            if "textedit_id" in normalized and "element_id" not in normalized:
-                normalized["element_id"] = normalized.pop("textedit_id")
-            if "text" not in normalized and "value" in normalized:
-                normalized["text"] = normalized.pop("value")
-        elif legacy_tool_name == "visualize_element":
-            if "id" in normalized and "element_id" not in normalized:
-                normalized["element_id"] = normalized.pop("id")
 
         return normalized
-
-    @staticmethod
-    def _sap_key_to_vkey(key):
-        if isinstance(key, int):
-            return key
-        text = str(key or "").strip()
-        if text.isdigit():
-            return int(text)
-        aliases = {
-            "enter": 0,
-            "f1": 1,
-            "f2": 2,
-            "f3": 3,
-            "back": 3,
-            "f4": 4,
-            "f5": 5,
-            "refresh": 5,
-            "f6": 6,
-            "f7": 7,
-            "f8": 8,
-            "execute": 8,
-            "f9": 9,
-            "f10": 10,
-            "f11": 11,
-            "save": 11,
-            "f12": 12,
-            "cancel": 12,
-        }
-        return aliases.get(text.lower(), 0)
-
-    def mcp_tool_available(self, name: str) -> bool:
-        """Public wrapper used by deterministic macro execution."""
-        return self._mcp_tool_available(name)
-
-    def execute_macro_tool_call(self, session, tool_name: str, tool_args: dict, attach_screen: bool = True) -> dict:
-        """Execute one deterministic Macro action through MCP first, then legacy fallback."""
-        result = self._execute_primary_tool_call(session, tool_name, tool_args or {})
-        if result.get("requires_confirmation"):
-            confirm_tool_name = result.get("_legacy_tool_name") or result.get("action") or tool_name
-            confirm_tool_args = result.get("_legacy_tool_args") or (tool_args or {})
-            result = self._handle_confirmation(
-                session,
-                result,
-                confirm_tool_name,
-                confirm_tool_args,
-            )
-        if attach_screen:
-            return self._attach_screen_after_tool(session, result)
-        if result.get("backend") == "mcp":
-            action = result.get("action", "")
-            if action in MCP_FIELD_WRITE_TOOL_NAMES:
-                self._remember_mcp_field_writes(result)
-            if result.get("mcp_screen"):
-                self._remember_mcp_screen_info(result["mcp_screen"])
-        return result
-
-    def scan_macro_screen(self, session) -> dict:
-        """Scan screen for deterministic Macro validation, not for LLM context."""
-        started_at = time.perf_counter()
-        screen_tool = self._first_available_mcp_tool([
-            "sap_get_screen_info",
-            "sap_get_light_snapshot",
-            *MCP_SCREEN_TOOL_CANDIDATES,
-        ])
-        elements_tool = self._first_available_mcp_tool([
-            "sap_get_screen_elements",
-            *MCP_SCREEN_TOOL_CANDIDATES,
-        ])
-        if screen_tool and elements_tool:
-            try:
-                raw_screen = self._call_mcp_tool_text(screen_tool, {})
-                parsed_screen = self._parse_mcp_json_text(raw_screen)
-                screen = self._extract_screen_from_mcp_payload(parsed_screen) or parsed_screen
-                if not isinstance(screen, dict):
-                    screen = {}
-
-                active_window = str(screen.get("active_window") or "wnd[0]")
-                container_id = active_window if active_window.startswith("wnd[") else "wnd[0]"
-                fingerprint = self._mcp_screen_fingerprint(screen)
-                raw_elements = self._call_mcp_tool_text(elements_tool, {
-                    "container_id": container_id,
-                    "max_depth": SAP_MACRO_SCREEN_MAX_DEPTH,
-                    "type_filter": SAP_MACRO_SCREEN_TYPE_FILTER,
-                    "changeable_only": SAP_MACRO_SCREEN_CHANGEABLE_ONLY,
-                })
-                elements = self._mcp_elements_from_text(raw_elements)
-                if fingerprint:
-                    self._remember_mcp_screen_info(screen)
-                    self._remember_mcp_elements(
-                        fingerprint,
-                        container_id,
-                        raw_elements,
-                        max_depth=SAP_MACRO_SCREEN_MAX_DEPTH,
-                        type_filter=SAP_MACRO_SCREEN_TYPE_FILTER,
-                    )
-                self._timing_log("Macro MCP screen scan", started_at)
-                return {
-                    "success": True,
-                    "backend": "mcp",
-                    "screen": screen,
-                    "active_window": active_window,
-                    "container_id": container_id,
-                    "elements": elements,
-                    "raw_screen": raw_screen,
-                    "raw_elements": raw_elements,
-                }
-            except Exception as exc:
-                mcp_error = str(exc)
-        else:
-            mcp_error = "MCP screen/elements tool unavailable"
-
-        try:
-            screen_state = scan_sap_screen(session)
-            self._timing_log("Macro legacy screen scan", started_at)
-            return {
-                "success": True,
-                "backend": "legacy",
-                "screen": screen_state,
-                "active_window": screen_state.get("active_window", ""),
-                "elements": screen_state.get("elements", []),
-                "fields": screen_state.get("fields", []),
-                "active_popup": screen_state.get("active_popup"),
-                "mcp_error": mcp_error,
-            }
-        except Exception as exc:
-            return {
-                "success": False,
-                "backend": "macro_scan",
-                "error": f"MCP scan failed: {mcp_error}; legacy scan failed: {exc}",
-                "screen": {},
-                "elements": [],
-            }
 
     def _execute_tool_call(self, session, tool_name, tool_args):
         """
@@ -2730,6 +2192,60 @@ class SAPAgent:
             return enriched
         return screen_state
 
+    def _study_post_tool_screen(self, session) -> dict:
+        """Study Mode 專用：工具執行後的輕量畫面快照。
+
+        只取 tcode / title / screen_number / status_bar，出現錯誤時才附帶
+        可輸入欄位清單（最多 10 筆），避免完整掃描導致 context 膨脹。
+        """
+        # MCP 路徑：用 session info 工具（速度最快，不掃 elements）
+        session_tool = self._first_available_mcp_tool(
+            ["sap_get_screen_info", *MCP_SESSION_INFO_TOOL_CANDIDATES]
+        )
+        if session_tool and self.mcp_client:
+            try:
+                raw = self._call_mcp_tool_text(session_tool, {})
+                parsed = self._parse_mcp_json_text(raw)
+                if isinstance(parsed, dict):
+                    status = parsed.get("status_bar") or parsed.get("statusbar") or {}
+                    has_error = str(status.get("type", "")).upper() in ("E", "W", "A")
+                    result: dict = {
+                        "tcode": parsed.get("tcode", ""),
+                        "title": parsed.get("title", ""),
+                        "screen_number": parsed.get("screen_number", ""),
+                        "status_bar": status,
+                        "backend": "mcp_session_info",
+                    }
+                    if has_error:
+                        result["fields"] = [
+                            f for f in parsed.get("fields", [])
+                            if f.get("changeable") or f.get("required")
+                        ][:10]
+                    return result
+            except Exception:
+                pass
+
+        # Legacy 退路：完整掃一次，但只保留最小欄位
+        try:
+            screen = scan_sap_screen(session)
+            status = screen.get("status_bar", {})
+            has_error = str(status.get("type", "")).upper() in ("E", "W", "A")
+            result = {
+                "tcode": screen.get("tcode", ""),
+                "title": screen.get("title", ""),
+                "screen_number": screen.get("screen_number", ""),
+                "status_bar": status,
+                "backend": "legacy_minimal",
+            }
+            if has_error:
+                result["fields"] = [
+                    f for f in screen.get("fields", [])
+                    if f.get("changeable") or f.get("required")
+                ][:10]
+            return result
+        except Exception as exc:
+            return {"backend": "scan_failed", "error": str(exc)}
+
     def _attach_screen_after_tool(self, session, tool_result):
         """工具執行後重新掃描 SAP，讓下一輪推理看到最新畫面。"""
         action = tool_result.get("action", "")
@@ -2936,6 +2452,25 @@ class SAPAgent:
         if repaired_any:
             self.conversation_history = repaired
 
+    def _request_study_prompt(self, title: str, message: str, warn: str = "") -> str:
+        """
+        Study Mode 無 element_id 步驟 / fallback 的提示。
+        預設：terminal print/input；UI 模式由 ui_app.py 覆寫為 dialog。
+
+        Returns:
+            使用者輸入的字串（"" = 確認，"/skip" = 略過，"/done" = 結束）
+        """
+        print(f"\n\033[1;33m  📌 {title}\033[0m")
+        for line in message.splitlines():
+            if line.strip():
+                print(f"\033[1;37m     {line}\033[0m")
+        if warn:
+            print(f"\033[33m  ⚠ {warn}\033[0m")
+        print()
+        return input(
+            "\033[1;36m  ✅ 完成後按 Enter；可輸入問題；/skip 略過；/done 結束 > \033[0m"
+        ).strip()
+
     def _handle_confirmation(self, session, tool_result, tool_name, tool_args):
         """
         處理需要使用者確認的敏感操作。
@@ -3009,6 +2544,162 @@ class SAPAgent:
         else:
             return self._process_auto(session, user_message)
 
+    def _extract_delivery_block_request(self, user_message: str) -> str:
+        """Return sales order number for delivery/credit/material block diagnostics."""
+        text = str(user_message or "").strip()
+        if not text:
+            return ""
+
+        lowered = text.lower()
+        has_order_intent = any(
+            marker in lowered
+            for marker in ("銷售訂單", "sales order", "so", "訂單")
+        )
+        has_block_intent = any(
+            marker in lowered
+            for marker in ("卡關", "不出貨", "不能出貨", "無法出貨", "出不了貨", "為什麼不出貨", "信用", "credit", "缺料", "庫存", "md04", "vkm1", "vkm3", "凍結", "block", "診斷")
+        )
+        if not (has_order_intent and has_block_intent):
+            return ""
+
+        match = re.search(r"(\d{6,})", text)
+        return match.group(1) if match else ""
+
+    def _try_direct_delivery_block_analysis(self, user_message: str) -> str | None:
+        """Use the dedicated MCP delivery block analyzer without an LLM loop."""
+        order_number = self._extract_delivery_block_request(user_message)
+        if not order_number:
+            return None
+
+        tool_name = "sap_analyze_delivery_block"
+        if not self._mcp_tool_available(tool_name):
+            available = []
+            try:
+                available = sorted(self.mcp_client.tool_names()) if self.mcp_client else []
+            except Exception:
+                available = []
+            hint = ""
+            if available:
+                hint = "\n目前 MCP tools 前幾個: " + ", ".join(available[:12])
+            return (
+                f"已偵測到銷售訂單 {order_number} 卡關診斷，但 MCP 工具 `{tool_name}` 目前不可用。\n"
+                "我已停止自動迭代，避免 LLM 改跑 VL10A 或其他非預期流程。\n"
+                "請先按 UI 的 MCP 診斷確認工具清單，並重啟 MCP server / SAP-GUI-Copilot，讓新版 mcp-sap-gui 載入。"
+                f"{hint}"
+            )
+
+        print(
+            "\033[90m"
+            f"[Agent] 偵測到訂單卡關診斷，直接呼叫 MCP 工具 {tool_name}"
+            "\033[0m"
+        )
+        try:
+            result_text = self._call_mcp_tool_text(tool_name, {"order_number": order_number})
+        except Exception as exc:
+            return (
+                f"已偵測到銷售訂單 {order_number} 卡關診斷，但 MCP 工具 `{tool_name}` 執行失敗：{exc}\n"
+                "這通常代表 MCP server 尚未重啟、SAP 尚未連上，或 VA03/VKM1/MD04 欄位 ID 與工具內候選 ID 不一致。"
+            )
+
+        payload = self._parse_mcp_json_text(result_text)
+        if not isinstance(payload, dict):
+            return f"銷售訂單 {order_number} 卡關診斷完成，但工具回傳格式無法解析：\n{result_text}"
+        if payload.get("error"):
+            return f"銷售訂單 {order_number} 卡關診斷失敗：{payload.get('error')}"
+
+        findings = payload.get("findings") or []
+        finding_lines = []
+        for finding in findings[:5]:
+            if isinstance(finding, dict):
+                finding_lines.append(f"- [{finding.get('severity', 'info')}] {finding.get('message', '')}")
+
+        checks = payload.get("checks") or {}
+        va03 = checks.get("va03") or {}
+        credit = checks.get("vkm1_credit") or {}
+        stock = checks.get("md04_stock") or {}
+        customer_ar = checks.get("fbl5n_ar") or {}
+
+        if stock.get("shortage"):
+            stock_text = "疑似缺料"
+        elif not stock.get("checked"):
+            stock_text = f"未執行（{stock.get('reason', '原因未回傳')}）"
+        else:
+            stock_text = "未抓到明確缺料"
+
+        if customer_ar.get("overdue_signal"):
+            ar_text = "疑似有逾期/到期未清帳款"
+        elif customer_ar.get("open_item_signal"):
+            ar_text = "有未清項目，但未抓到明確逾期訊號"
+        elif not customer_ar.get("checked"):
+            ar_text = f"未執行（{customer_ar.get('reason', '原因未回傳')}）"
+        else:
+            ar_text = "未抓到明確逾期或未清帳款訊號"
+
+        if credit.get("blocked"):
+            if credit.get("filter_basis") == "customer_credit_account":
+                credit_text = "疑似凍結（以客戶信用帳戶篩選）"
+            else:
+                credit_text = "疑似凍結"
+        elif credit.get("checked") and not credit.get("filter_set"):
+            credit_text = "未完成篩選（VKM1 欄位未對上）"
+        elif credit.get("filter_basis") == "customer_credit_account":
+            credit_text = "未抓到明確信用凍結（已用客戶信用帳戶篩選）"
+        else:
+            credit_text = "未抓到明確信用凍結"
+
+        has_delivery_block = any(
+            isinstance(finding, dict) and finding.get("type") == "delivery_block"
+            for finding in findings
+        )
+        va03_status_text = "發現交貨凍結/出貨卡關訊號" if has_delivery_block else "未抓到明確交貨凍結訊號"
+
+        if credit.get("blocked") and not stock.get("shortage"):
+            conclusion_text = "這張單最可能卡在信用凍結，不是缺料。"
+        elif stock.get("shortage") and not credit.get("blocked"):
+            conclusion_text = "這張單最可能卡在缺料或庫存可用量不足。"
+        elif credit.get("blocked") and stock.get("shortage"):
+            conclusion_text = "這張單同時有信用凍結與缺料風險，需要兩邊一起處理。"
+        else:
+            conclusion_text = payload.get("conclusion", "未取得明確結論")
+
+        customer = va03.get("customer", "N/A")
+        if credit.get("blocked"):
+            recommendations = [
+                f"1. 請信用管理/財務人員檢查客戶 {customer} 的信用狀態。",
+                "2. 請依 FBL5N 應收帳款檢查結果確認是否有逾期或未清項目需要處理。",
+                "3. 若確認可放行，請至 VKM3/VKM4 或公司既有信用釋放流程處理。",
+                "4. 信用釋放後，再重新建立或處理出貨。",
+            ]
+        elif stock.get("shortage"):
+            recommendations = [
+                "1. 請物管或生管確認 MD04 的可用量與補貨日期。",
+                "2. 若有替代料或可調撥庫存，先處理供給來源。",
+                "3. 庫存滿足後，再重新執行出貨流程。",
+            ]
+        else:
+            recommendations = [
+                "1. 請先依 VA03 狀態文字確認交貨凍結原因。",
+                "2. 若信用與庫存都不是主因，請再檢查交貨排程、揀配、運輸或出貨單建立流程。",
+            ]
+
+        return (
+            f"銷售訂單 {payload.get('order_number', order_number)} 卡關診斷完成。\n"
+            f"\n結論: {conclusion_text}\n"
+            "\n基本資料:\n"
+            f"- 買方: {customer}\n"
+            f"- 物料: {va03.get('material') or 'N/A'}\n"
+            f"- 工廠: {va03.get('plant') or 'N/A'}\n"
+            "\n檢查結果:\n"
+            f"- VA03 狀態: {va03_status_text}\n"
+            f"- VKM1 信用檢查: {credit_text}\n"
+            f"- MD04 庫存檢查: {stock_text}\n"
+            f"- FBL5N 應收帳款檢查: {ar_text}\n"
+            "\n發現:\n"
+            + ("\n".join(finding_lines) if finding_lines else "- 無明確卡關訊號")
+            + "\n\n建議處理:\n"
+            + "\n".join(recommendations)
+        )
+
     def _process_ask(self, session, user_message: str, extra_context: str = "") -> str:
         """
         Ask Mode: 結合畫面狀態回答問題（不執行操作）。
@@ -3058,15 +2749,15 @@ class SAPAgent:
         """
         Auto Mode: 執行 ReAct Loop（可呼叫工具操作 SAP）。
         """
+        direct_block_result = self._try_direct_delivery_block_analysis(user_message)
+        if direct_block_result is not None:
+            return direct_block_result
+
         # Step 1: 掃描當前畫面
         print("\033[90m[Agent] 正在掃描 SAP 畫面...\033[0m")
         screen_text, screen_backend = self._screen_context_text(session, purpose="auto")
         tool_schemas = self._tool_schemas_for_auto(screen_text)
         tool_backend = "mcp" if tool_schemas != TOOL_SCHEMAS else "legacy"
-        carryover_guard_text, auto_clear_fields, auto_rewrite_fields = self._auto_selection_carryover_guard(
-            screen_text,
-            user_message,
-        )
 
         # 組合訊息：畫面狀態 + 使用者指令
         combined_message = (
@@ -3075,8 +2766,6 @@ class SAPAgent:
             f"## 工具來源\n{tool_backend}\n\n"
             f"## 使用者指令\n{user_message}"
         )
-        if carryover_guard_text:
-            combined_message = f"{combined_message}\n\n{carryover_guard_text}"
 
         # 加入對話歷史
         self._trim_conversation_history()
@@ -3137,47 +2826,7 @@ class SAPAgent:
 
                 interrupted = False
                 try:
-                    tool_args = self._apply_auto_selection_clears_to_tool_args(
-                        tool_name,
-                        tool_args,
-                        auto_clear_fields,
-                        auto_rewrite_fields,
-                    )
-                    auto_preclear_result = None
-                    if auto_rewrite_fields and self._tool_is_query_submit(tool_name, tool_args):
-                        rewrite_labels = [
-                            f"{item.get('label') or field_id} ({field_id}) = {item.get('value')}"
-                            for field_id, item in auto_rewrite_fields.items()
-                        ]
-                        tool_result = {
-                            "success": False,
-                            "action": tool_name,
-                            "error": (
-                                "Auto Selection Carryover Guard blocked query submit because "
-                                "some stale fields are mentioned in the current request but still "
-                                "have old values. Update those fields before Execute/F8/Enter."
-                            ),
-                            "_tool_args": tool_args,
-                            "stale_fields_requiring_rewrite": rewrite_labels,
-                        }
-                        tool_result = self._attach_screen_after_tool(session, tool_result)
-                        raise RuntimeError("__AUTO_PRECLEAR_BLOCKED__")
-                    if auto_clear_fields and self._tool_is_query_submit(tool_name, tool_args):
-                        auto_preclear_result = self._run_auto_selection_preclear(session, auto_clear_fields)
-                        if auto_preclear_result and not auto_preclear_result.get("success", False):
-                            tool_result = {
-                                "success": False,
-                                "action": tool_name,
-                                "error": "Auto Selection Carryover Guard pre-clear failed; query submit was blocked to avoid stale filters.",
-                                "_tool_args": tool_args,
-                                "auto_preclear": auto_preclear_result,
-                            }
-                            tool_result = self._attach_screen_after_tool(session, tool_result)
-                            raise RuntimeError("__AUTO_PRECLEAR_BLOCKED__")
-
                     tool_result = self._execute_primary_tool_call(session, tool_name, tool_args)
-                    if auto_preclear_result:
-                        tool_result["auto_preclear"] = auto_preclear_result
 
                     if tool_result.get("requires_confirmation"):
                         confirm_tool_name = tool_result.get("_legacy_tool_name") or tool_result.get("action") or tool_name
@@ -3194,13 +2843,6 @@ class SAPAgent:
                         "action": tool_name,
                         "error": "使用者中斷工具執行",
                     }
-                except RuntimeError as e:
-                    if str(e) != "__AUTO_PRECLEAR_BLOCKED__":
-                        tool_result = {
-                            "success": False,
-                            "action": tool_name,
-                            "error": f"工具執行例外: {e}",
-                        }
                 except Exception as e:
                     tool_result = {
                         "success": False,
@@ -3268,10 +2910,179 @@ class SAPAgent:
         ])
         return "\n".join(lines)
 
+    def _one_shot_ask(self, context: str, question: str) -> str:
+        """Step Runner 內嵌 Q&A：單次 LLM 呼叫回答使用者問題。"""
+        try:
+            response = self._call_copilot_api(
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT_ASK},
+                    {"role": "user", "content": f"{context}\n\n## 使用者問題\n{question}"},
+                ],
+                tools=None,
+            )
+            choices = response.get("choices", [])
+            if choices:
+                return choices[0].get("message", {}).get("content", "(AI 未回傳內容)")
+        except Exception as e:
+            return f"(問 AI 失敗：{e})"
+        return "(無回應)"
+
+    def _run_sop_step_runner(
+        self,
+        session,
+        steps: list[StepItem],
+        sop_name: str,
+        extra_context: str = "",
+    ) -> str:
+        """
+        直接依 SOP 步驟引導，不在步驟間呼叫 LLM。
+
+        LLM 僅在以下情況呼叫：
+        - 使用者在某步驟輸入了問題（非空白、非快捷指令）
+        - （未來）元件找不到需要 AI 輔助定位
+
+        快捷指令：
+        - Enter（空）       → 確認完成，進入下一步
+        - /skip 或 s        → 略過此步驟
+        - /done 或 結束     → 提早結束教學
+        - 任何其他文字      → 視為問題，呼叫 AI 回答後繼續
+        """
+        total = len(steps)
+        print(f"\n\033[90m[Study] 步驟引導模式：共 {total} 步（Enter=下一步 / /skip=略過 / /done=結束）\033[0m\n")
+
+        completed = 0
+        for step in steps:
+            print(f"\n\033[1;34m{'─' * 54}\033[0m")
+            print(f"\033[1;34m  步驟 {step.n}/{total}: {step.header}\033[0m")
+            print(f"\033[1;34m{'─' * 54}\033[0m")
+
+            if step.element_id:
+                # guide_user_action 負責：MCP focus → 高亮 → 顯示說明 → 等待輸入
+                tool_args = {
+                    "element_id": step.element_id,
+                    "instruction": clean_step_instruction(step),
+                    "reason": f"步驟 {step.n}/{total}",
+                    "confidence": "high",
+                    "source": f"SOP: {sop_name}",
+                    "expected_response_type": "confirm",
+                }
+                try:
+                    result = self._execute_study_tool_call(
+                        session, "guide_user_action", tool_args
+                    )
+                except Exception as exc:
+                    print(f"\033[33m  ⚠ 元件高亮失敗: {exc}\033[0m")
+                    result = {"success": False}
+
+                # 元件不在目前畫面（尚未切換、子表單未展開等）→ 退回純文字 dialog
+                if not result.get("success") and not result.get("finish_requested"):
+                    body = clean_step_instruction(step)
+                    if step.vkey is not None:
+                        body += f"\n\n快捷鍵：{vkey_label(step.vkey)}"
+                    warn_msg = "無法定位元件，請手動操作後確認。" if result.get("error") else ""
+                    raw = self._request_study_prompt(
+                        f"步驟 {step.n}/{total}: {step.header}",
+                        body,
+                        warn=warn_msg,
+                    )
+                    lower = raw.lower()
+                    result = {
+                        "success": True,
+                        "user_response": raw,
+                        "finish_requested": lower in ("/done", "done", "結束", "finish"),
+                        "skipped": lower in ("/skip", "skip", "s"),
+                    }
+            else:
+                # 無 element_id（如 F8 執行、確認畫面）
+                # 通過可覆寫的 hook：terminal 模式 → print/input，UI 模式 → dialog
+                body = clean_step_instruction(step)
+                if step.vkey is not None:
+                    body += f"\n\n快捷鍵：{vkey_label(step.vkey)}"
+                raw = self._request_study_prompt(
+                    f"步驟 {step.n}/{total}: {step.header}",
+                    body,
+                )
+                lower = raw.lower()
+                result = {
+                    "success": True,
+                    "user_response": raw,
+                    "finish_requested": lower in ("/done", "done", "結束", "finish"),
+                    "skipped": lower in ("/skip", "skip", "s"),
+                }
+
+            finish_requested = result.get("finish_requested", False)
+            user_response = str(result.get("user_response", "") or "")
+            skipped = result.get("skipped", False)
+
+            if finish_requested:
+                print(f"\n\033[32m  ✅ 教學已依您要求結束（完成 {completed}/{total} 步）。\033[0m")
+                break
+
+            if skipped:
+                print(f"\033[90m  已略過步驟 {step.n}\033[0m")
+                continue
+
+            completed += 1
+
+            # 使用者輸入了問題（非空白、非常見確認詞）
+            _confirm_words = {"ok", "好", "是", "y", "ye", "yes", "完成", ""}
+            if user_response.lower() not in _confirm_words:
+                print(f"\033[90m[Study] 問 AI...\033[0m")
+                screen_text, _ = self._screen_context_text(session, purpose="ask")
+                step_ctx = (
+                    f"## 當前 SOP 步驟 ({step.n}/{total}): {step.header}\n"
+                    f"{step.detail[:600]}\n\n"
+                    f"## SOP 說明\n{extra_context[:1500]}\n\n"
+                    f"## 當前 SAP 畫面\n{screen_text[:3000]}"
+                )
+                answer = self._one_shot_ask(step_ctx, user_response)
+                self._request_study_prompt(
+                    f"AI 回覆（步驟 {step.n}/{total}）",
+                    answer,
+                )
+
+        # 結束時輕量掃描
+        compact = self._study_post_tool_screen(session)
+        tcode = compact.get("tcode", "")
+        title = compact.get("title", "")
+        screen_n = compact.get("screen_number", "")
+        status_text = (compact.get("status_bar") or {}).get("text", "")
+        lines = [
+            f"✅ Study Mode 完成（{completed}/{total} 步）。",
+            f"最終畫面：{tcode} / {title}（screen {screen_n}）",
+        ]
+        if status_text:
+            lines.append(f"狀態列：{status_text}")
+        return "\n".join(lines)
+
     def _process_study(self, session, user_message: str, extra_context: str = "") -> str:
         """
-        Study Mode: 使用 ReAct Loop 但只允許引導工具（guide_user_action, visualize_element）。
+        Study Mode 入口。
+
+        Fast path（Step Runner）：
+          若 extra_context（SOP 文字）能解析出帶有 element_id 的步驟，
+          直接循序執行，步驟間無 LLM API 呼叫。
+
+        Slow path（LLM ReAct Loop）：
+          步驟解析不足時（element_id 覆蓋率 < 30% 或步驟數 < 2），
+          回退到原本的 LLM 驅動引導模式。
         """
+        # ── Fast path: SOP Step Runner ──────────────────────────────────────
+        if extra_context:
+            steps = parse_sop_steps(extra_context)
+            confidence = steps_confidence(steps)
+            if len(steps) >= 2 and confidence >= 0.3:
+                sop_name_m = re.search(r'#\s*SOP[：:]\s*(.+)', extra_context)
+                sop_name = sop_name_m.group(1).strip() if sop_name_m else "SOP"
+                print(
+                    f"\033[90m[Study] 解析出 {len(steps)} 個步驟"
+                    f"（element_id 覆蓋率 {int(confidence * 100)}%）"
+                    f"，啟用步驟引導模式\033[0m"
+                )
+                return self._run_sop_step_runner(session, steps, sop_name, extra_context)
+
+        # ── Slow path: LLM ReAct Loop ────────────────────────────────────────
+        print("\033[90m[Study] 步驟解析不足，改用 LLM 引導模式\033[0m")
         print("\033[90m[Agent] 正在掃描 SAP 畫面...\033[0m")
         screen_text, screen_backend = self._screen_context_text(session, purpose="study")
 
@@ -3286,8 +3097,8 @@ class SAPAgent:
         self._trim_conversation_history()
         self.conversation_history.append({"role": "user", "content": combined_message})
 
-        for iteration in range(MAX_ITERATIONS):
-            print(f"\033[90m[Agent] Study ReAct 迭代 {iteration + 1}/{MAX_ITERATIONS}\033[0m")
+        for iteration in range(STUDY_MAX_ITERATIONS):
+            print(f"\033[90m[Agent] Study ReAct 迭代 {iteration + 1}/{STUDY_MAX_ITERATIONS}\033[0m")
 
             try:
                 response = self._call_copilot_api(
@@ -3330,6 +3141,8 @@ class SAPAgent:
                 except json.JSONDecodeError:
                     tool_args = {}
 
+                interrupted = False
+
                 # Study Mode 安全檢查：只允許引導工具
                 if tool_name not in STUDY_ALLOWED_TOOLS:
                     print(f"\033[33m[Agent] Study Mode 攔截了禁用工具: {tool_name}\033[0m")
@@ -3339,10 +3152,8 @@ class SAPAgent:
                     }
                 else:
                     print(f"\033[36m[Agent] 呼叫工具: {tool_name}({tool_args})\033[0m")
-                    interrupted = False
                     try:
                         tool_result = self._execute_study_tool_call(session, tool_name, tool_args)
-                        tool_result = self._attach_screen_after_tool(session, tool_result)
                     except KeyboardInterrupt:
                         interrupted = True
                         tool_result = {
@@ -3356,15 +3167,18 @@ class SAPAgent:
                             "action": tool_name,
                             "error": f"工具執行例外: {e}",
                         }
-                if tool_name not in STUDY_ALLOWED_TOOLS:
-                    interrupted = False
-                    tool_result = self._attach_screen_after_tool(session, tool_result)
+
+                # Study Mode 輕量畫面快照（取代完整 _attach_screen_after_tool 掃描）
+                tool_result["screen_summary"] = self._study_post_tool_screen(session)
+
                 print(f"\033[90m[Agent] 工具結果: {json.dumps({k: v for k, v in tool_result.items() if k != 'screen_after'}, ensure_ascii=False)}\033[0m")
 
+                # 存入 history 時移除 screen_after（避免大型畫面 JSON 累積造成 context 膨脹）
+                history_entry = {k: v for k, v in tool_result.items() if k != "screen_after"}
                 self.conversation_history.append({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
-                    "content": json.dumps(tool_result, ensure_ascii=False),
+                    "content": json.dumps(history_entry, ensure_ascii=False),
                 })
 
                 if interrupted:

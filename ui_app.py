@@ -34,34 +34,39 @@ from sap_knowledge_library import SAPKnowledgeLibrary
 from sap_monitor import SAPMonitor
 from sap_recorder import SAPRecorder
 from sap_skill_library import SAPSkillLibrary
-from sap_macro_library import SAPMacroError, SAPMacroLibrary, macro_result_can_fallback_to_auto
 from sap_table_inspector import format_table_inspection, inspect_current_tables
 from mcp_client import get_default_sync_client
+from sop_step_parser import compress_for_display, display_lines_to_text
 
 
-APP_VERSION = "0.13.1"
-
-UI_COLORS = {
-    "bg": "#f4efe7",
-    "panel": "#f9f6f0",
-    "surface": "#ebe4d8",
-    "border": "#d2c7b7",
-    "text": "#2c231a",
-    "muted": "#8a7a6b",
-    "accent": "#c73900",
-    "user": "#0d47a1",
-    "ai": "#087a39",
-    "system": "#6b5947",
-    "warning": "#a15c00",
-    "error": "#b00020",
-    "macro": "#5b2bbf",
-}
+APP_VERSION = "0.13.0"
 
 MODE_LABELS = {
     "auto": "Auto",
     "ask": "Ask",
     "solve": "Solve",
     "study": "Study",
+}
+
+THEME = {
+    "bg": "#F8F5F0",
+    "panel": "#EEE8DD",
+    "panel_alt": "#E6DED2",
+    "text": "#332D28",
+    "muted": "#7A7168",
+    "accent": "#C43E08",
+    "accent_dark": "#A33205",
+    "accent_soft": "#EFD7C5",
+    "green": "#21854B",
+    "green_dark": "#176638",
+    "purple": "#6129B7",
+    "blue": "#213A8F",
+    "danger": "#8E3326",
+    "border": "#D6CFC4",
+    "output_bg": "#FCFAF7",
+    "input_bg": "#EDE7DD",
+    "button_bg": "#E5DED4",
+    "button_active": "#D8CEC1",
 }
 
 
@@ -89,6 +94,23 @@ def parse_study_request(raw_text):
         cleaned.append(token)
 
     return " ".join(cleaned).strip(), allow_draft, save_draft
+
+
+def _scan_with_timeout(session, timeout: float = 3.0):
+    """在背景 daemon thread 執行 scan_sap_screen，超時直接回傳 None。
+    daemon=True 確保即使 scan 卡住，app 仍可正常關閉。"""
+    result: list = [None]
+
+    def _do():
+        try:
+            result[0] = scan_sap_screen(session)
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_do, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    return result[0]
 
 
 def _screen_brief(screen_state):
@@ -232,9 +254,10 @@ class SAPCopilotWorker(threading.Thread):
         self.monitor = None
         self.skill_library = None
         self.knowledge_library = None
-        self.macro_library = None
         self.ready = False
+        self.last_connect_error = ""
         self.study_context = ""
+        self.study_skill_name = ""
         self.prompt_counter = 0
         self.prompt_lock = threading.Lock()
         self.pending_prompts = {}
@@ -246,25 +269,7 @@ class SAPCopilotWorker(threading.Thread):
         self.outbound_queue.put({"kind": kind, "payload": payload})
 
     def log(self, text):
-        if self._is_dialog_log(text) or self._is_ui_status_log(text):
-            self.emit("dialog_log", text)
-        else:
-            self.emit("terminal_log", text)
-
-    @staticmethod
-    def _is_dialog_log(text):
-        stripped = str(text or "").strip()
-        return stripped.startswith("You:") or stripped.startswith("AI:") or stripped.startswith("AI:\n")
-
-    @staticmethod
-    def _is_ui_status_log(text):
-        stripped = str(text or "").strip()
-        return (
-            stripped.startswith("Mode switched")
-            or (stripped.startswith("Initializing ") and "SAP connection" in stripped)
-            or stripped.startswith("Connected:")
-            or stripped.startswith("Connection failed:")
-        )
+        self.emit("log", text)
 
     def emit_state(self):
         state = {
@@ -325,11 +330,11 @@ class SAPCopilotWorker(threading.Thread):
 
             self.agent = SAPAgent(auth=self.auth, provider_name=requested_provider)
             self.agent._handle_confirmation = self._handle_confirmation_ui
+            self.agent._request_study_prompt = self._request_study_prompt_ui
             llm_brain.TOOL_FUNCTIONS["guide_user_action"] = self._guide_user_action_ui
             self.recorder = SAPRecorder()
             self.skill_library = SAPSkillLibrary()
             self.knowledge_library = SAPKnowledgeLibrary()
-            self.macro_library = SAPMacroLibrary()
             self.ready = True
             self.log(
                 "Connected: "
@@ -338,12 +343,16 @@ class SAPCopilotWorker(threading.Thread):
                 f"provider={provider_display_name(self.agent.provider_name)} model={self.agent.model}"
             )
         except Exception as exc:
+            self.last_connect_error = str(exc)
             self.log(f"Connection failed: {exc}")
+        else:
+            self.last_connect_error = ""
         self.emit_state()
 
     def _ensure_ready(self):
         if not self.ready:
-            raise RuntimeError("UI is not connected. Press Connect first.")
+            detail = f" Last connection error: {self.last_connect_error}" if self.last_connect_error else ""
+            raise RuntimeError(f"UI is not connected. Press Connect first.{detail}")
 
     def _session(self):
         self._ensure_ready()
@@ -377,8 +386,6 @@ class SAPCopilotWorker(threading.Thread):
                 self._show_recordings()
             elif action == "study":
                 self._run_study(job.get("goal", ""))
-            elif action == "macro":
-                self._handle_macro_command(job.get("arg", ""))
             elif action == "play":
                 self._play(job.get("name", ""))
             else:
@@ -394,20 +401,23 @@ class SAPCopilotWorker(threading.Thread):
         if response_queue:
             response_queue.put(response)
 
-    def _request_prompt(self, title, message, default="", prompt_type="text"):
+    def _request_prompt(self, title, message, default="", prompt_type="text", extra=None):
         with self.prompt_lock:
             self.prompt_counter += 1
             prompt_id = self.prompt_counter
             response_queue = queue.Queue(maxsize=1)
             self.pending_prompts[prompt_id] = response_queue
 
-        self.emit("prompt", {
+        payload = {
             "id": prompt_id,
             "type": prompt_type,
             "title": title,
             "message": message,
             "default": default,
-        })
+        }
+        if extra:
+            payload.update(extra)
+        self.emit("prompt", payload)
         return response_queue.get()
 
     def _handle_confirmation_ui(self, session, tool_result, tool_name, tool_args):
@@ -461,7 +471,14 @@ class SAPCopilotWorker(threading.Thread):
         )
         display_choices = _normalize_study_choices(choices)
         if not target.get("actionable"):
-            self.log(f"Study target invalid: {target.get('error')}")
+            # 掃當前畫面讓 AI 知道使用者現在在哪，才能修正下一步
+            current_screen = _scan_with_timeout(session, timeout=2.0) or {}
+            current_screen_brief = {
+                "tcode":         current_screen.get("tcode", ""),
+                "screen_number": current_screen.get("screen_number", ""),
+                "title":         current_screen.get("title", ""),
+            }
+            self.log(f"找不到欄位 {element_id}，AI 正在根據目前畫面重新判斷…")
             return {
                 "success": False,
                 "action": "guide_user_action",
@@ -476,6 +493,13 @@ class SAPCopilotWorker(threading.Thread):
                 "target_actionable": False,
                 "error": target.get("error", "Study target is not actionable."),
                 "retry_advice": target.get("retry_advice", ""),
+                "current_screen": current_screen_brief,
+                "hint": (
+                    "The specified element_id was not found on the current screen. "
+                    "Use current_screen to understand where the user is now, "
+                    "then call guide_user_action again with the correct element_id "
+                    "for this screen, or give a plain text instruction without element_id."
+                ),
             }
 
         viz_result = {}
@@ -492,38 +516,23 @@ class SAPCopilotWorker(threading.Thread):
             except Exception as exc:
                 viz_result = {"success": False, "error": str(exc)}
 
-        display_instruction = _compact_study_text(instruction, max_lines=5, max_chars=520)
-        display_reason = _compact_study_text(reason, max_lines=1, max_chars=180)
-
-        prompt_lines = [display_instruction or instruction]
-        if display_reason:
-            prompt_lines.append(f"\n理由: {display_reason}")
-        if source or confidence:
-            prompt_lines.append(f"來源/信心: {source or '未標示來源'} / {confidence or '未標示信心'}")
+        display_lines = compress_for_display(_compact_study_text(instruction, max_lines=20, max_chars=2000))
         if display_choices:
-            prompt_lines.append("選項:")
-            for index, choice in enumerate(display_choices, 1):
-                prompt_lines.append(f"{index}. {choice}")
-        if target_id:
-            prompt_lines.append(f"\nElement: {target_id}")
-        if target.get("element_type"):
-            prompt_lines.append(f"Element type: {target.get('element_type')}")
-        if current_value:
-            prompt_lines.append(f"Current value: {current_value}")
-        if viz_result and not viz_result.get("success"):
-            prompt_lines.append(f"Highlight failed: {viz_result.get('error', '')}")
-        if expected_response_type == "choice":
-            prompt_lines.append("\n請輸入選項編號或文字；直接 OK 代表接受建議選項。")
-        elif expected_response_type == "value":
-            prompt_lines.append("\n請輸入本次要使用的值；或輸入 /skip、/done。")
-        else:
-            prompt_lines.append("\n完成後直接按 OK；可輸入回覆內容，或輸入 /skip、/done。")
+            display_lines += [("body", f"  {i}. {c}") for i, c in enumerate(display_choices, 1)]
+
+        step_title = reason or "Study Step"  # reason 通常是「步驟 N/M」
 
         user_response = str(self._request_prompt(
             "Study Step",
-            "\n".join(prompt_lines),
+            display_lines_to_text(display_lines),
             default="",
-            prompt_type="text",
+            prompt_type="study_step",
+            extra={
+                "step_title": step_title,
+                "body": display_lines,
+                "current_value": current_value or "",
+                "warn": "",
+            },
         ) or "").strip()
         skipped = user_response.lower() in ("/skip", "skip", "s")
         finish_requested = user_response.lower() in (
@@ -558,11 +567,32 @@ class SAPCopilotWorker(threading.Thread):
             "message": "User skipped this step." if skipped else "User confirmed this study step in UI.",
         }
 
+    def _request_study_prompt_ui(self, title: str, message: str, warn: str = "") -> str:
+        """
+        Study Mode 無 element_id 步驟 / AI 回覆的 UI 版本 hook。
+        取代 terminal print/input，改以彈出對話框呈現。
+        """
+        display_lines = compress_for_display(message)
+        user_response = str(self._request_prompt(
+            "Study Step",
+            display_lines_to_text(display_lines),
+            default="",
+            prompt_type="study_step",
+            extra={
+                "step_title": title,
+                "body": display_lines,
+                "current_value": "",
+                "warn": warn,
+            },
+        ) or "").strip()
+        return user_response
+
     def _set_mode(self, mode):
         self._ensure_ready()
         self.agent.set_mode(mode)
         if mode != "study":
             self.study_context = ""
+            self.study_skill_name = ""
         self.log(f"Mode switched to {MODE_LABELS.get(mode, mode)}.")
 
     def _handle_text(self, text):
@@ -609,21 +639,35 @@ class SAPCopilotWorker(threading.Thread):
                 self._play(arg)
         elif cmd == "/study":
             if not arg:
-                self.log("Usage: /study [SOP name] | /study --draft [goal] | /study --save-draft [goal]")
+                self.log(SAPSkillLibrary.format_module_list())
+                self.log("/study [模組代碼]            查看課程（MM / SD / FI / CO / PP）\n"
+                         "/study [模組代碼] [名稱]     啟動教練，例如 /study FI 應付帳款查詢\n"
+                         "/study --draft [目標]        探索草稿（無需既有 SOP）")
             else:
-                self._run_study(arg)
-        elif cmd == "/macros":
-            self._show_macros()
-        elif cmd == "/macro":
-            self._handle_macro_command(arg)
+                sop_name, _allow, _save = parse_study_request(arg)
+                module_code, remainder = SAPSkillLibrary.parse_module_prefix(sop_name)
+                if module_code and not remainder:
+                    self.log(self.skill_library.format_module_curriculum(module_code))
+                else:
+                    self._run_study(arg)
         elif cmd == "/knowledge":
             self._handle_knowledge_command(arg)
         elif cmd == "/skills":
             self._handle_skills_command(arg)
+        elif cmd == "/import":
+            if not arg:
+                self.log("Usage: /import <vbs檔路徑> [錄製名稱]\n"
+                         "  將 SAP GUI 內建錄製器產生的 .vbs 腳本匯入為錄製檔。\n"
+                         "  範例: /import C:\\Users\\user\\Desktop\\VA01.vbs VA01建立銷售訂單")
+            else:
+                parts2 = arg.split(maxsplit=1)
+                vbs_path = parts2[0].strip('"').strip("'")
+                rec_name = parts2[1].strip() if len(parts2) > 1 else _os.path.splitext(_os.path.basename(vbs_path))[0]
+                self._import_vbs(vbs_path, rec_name)
         elif cmd == "/connect":
             self._connect(arg or None)
         else:
-            self.log("Available commands: /scan, /inspect table, /mcp, /record, /stop, /recordings, /play, /study, /macro, /knowledge, /skills, /ask, /solve, /auto, /connect, /reset")
+            self.log("Available commands: /scan, /inspect table, /mcp, /record, /stop, /recordings, /play, /study, /knowledge, /skills, /ask, /solve, /auto, /connect, /reset, /import")
 
     def _parse_inline_options(self, text):
         options = {}
@@ -749,6 +793,12 @@ class SAPCopilotWorker(threading.Thread):
 
     def _extra_context_for_current_mode(self):
         if self.agent.mode == "study":
+            if self.study_skill_name:
+                try:
+                    data = self.skill_library.load_skill(self.study_skill_name)
+                    return data.get("sop_text") or self.study_context
+                except Exception:
+                    pass
             return self.study_context
         if self.agent.mode not in ("ask", "solve"):
             return ""
@@ -763,14 +813,10 @@ class SAPCopilotWorker(threading.Thread):
     def _process_message(self, text):
         self._ensure_ready()
         self.log(f"You: {text}")
-        if self._run_matched_macro(text):
-            return
         session = self._session()
-        response = self.agent.process_message(
-            session,
-            text,
-            extra_context=self._extra_context_for_current_mode(),
-        )
+        extra_context = self._extra_context_for_current_mode()
+
+        response = self.agent.process_message(session, text, extra_context=extra_context)
         self.log(f"AI:\n{response}")
 
     def _scan(self):
@@ -907,6 +953,46 @@ class SAPCopilotWorker(threading.Thread):
         except Exception as exc:
             self.log(f"AI SOP generation skipped: {exc}")
 
+    def _import_vbs(self, vbs_path: str, rec_name: str):
+        """匯入 SAP GUI 內建錄製器的 .vbs 腳本，存成錄製 JSON 並產生 SOP。"""
+        import sap_vbs_parser as _vbs_parser
+        try:
+            with open(vbs_path, encoding="utf-8-sig", errors="replace") as f:
+                vbs_text = f.read()
+        except FileNotFoundError:
+            self.log(f"找不到檔案: {vbs_path}")
+            return
+        except Exception as exc:
+            self.log(f"讀取 VBS 失敗: {exc}")
+            return
+
+        self.log(f"解析 VBS 腳本: {vbs_path}")
+        recording = _vbs_parser.parse_vbs(vbs_text, rec_name)
+
+        raw_count = recording.get("raw_event_count", 0)
+        evt_count = recording.get("event_count", 0)
+        self.log(f"解析完成：原始動作 {raw_count} 個，壓縮後 {evt_count} 個")
+
+        if not self.recorder:
+            from sap_recorder import SAPRecorder
+            self.recorder = SAPRecorder()
+
+        filepath = self.recorder.save_recording(recording)
+        self.log(f"錄製已儲存: {filepath}")
+
+        try:
+            sop_path = self.recorder.generate_sop_with_llm(
+                rec_name,
+                recording.get("events", []),
+                self.auth,
+                screen_state=None,
+                provider=self.agent.provider if self.agent else None,
+            )
+            if sop_path:
+                self.log(f"AI SOP 已產生: {sop_path}")
+        except Exception as exc:
+            self.log(f"AI SOP 產生跳過: {exc}")
+
     def _show_recordings(self):
         self._ensure_ready()
         recordings = self.skill_library.list_recordings()
@@ -924,213 +1010,12 @@ class SAPCopilotWorker(threading.Thread):
         self._ensure_ready()
         self.log(self.skill_library.get_recording_summary(name))
 
-    def _show_macros(self):
-        self._ensure_ready()
-        macros = self.macro_library.list_macros()
-        if not macros:
-            self.log("No macro found. Put structured Markdown macro files under macros/.")
-            return
-        lines = ["Macros:"]
-        for index, item in enumerate(macros, 1):
-            tags = ", ".join(item.get("tags") or [])
-            tag_text = f" | {tags}" if tags else ""
-            lines.append(
-                f"{index}. {item.get('name')} [{item.get('mode')}] "
-                f"inputs={item.get('input_count')} steps={item.get('step_count')}{tag_text}"
-            )
-            if item.get("description"):
-                lines.append(f"   {item.get('description')}")
-            lines.append(f"   {item.get('filepath')}")
-        self.log("\n".join(lines))
-
-    def _prompt_macro_input(self, item):
-        message = f"Macro input: {item.name}"
-        if item.label:
-            message += f"\n{item.label}"
-        if item.description:
-            message += f"\n{item.description}"
-        value = self._request_prompt(
-            "Macro Input",
-            message,
-            default=item.default or "",
-            prompt_type="text",
-        )
-        return str(value or item.default or "").strip()
-
-    def _macro_values(self, macro, values):
-        return self.macro_library.prompt_missing_inputs(
-            macro,
-            values,
-            prompt_callback=self._prompt_macro_input,
-        )
-
-    def _run_macro(self, arg):
-        self._ensure_ready()
-        name, values = self.macro_library.parse_values(arg)
-        if not name:
-            self.log("Usage: /macro run <macro-name> key=value ...")
-            return
-        macro = self.macro_library.load_macro(name)
-        if macro.mode == "study":
-            raise SAPMacroError("This macro is mode=study. Use /macro study or /study --macro instead of /macro run.")
-        runtime_values = self._macro_values(macro, values)
-        self.log(f"Macro Run: {macro.name}")
-        result = self.macro_library.execute_macro(
-            self._session(),
-            self.agent,
-            macro,
-            runtime_values,
-            log_callback=lambda text: self.log(f"  {text}"),
-        )
-        result["runtime_values"] = runtime_values
-        if result.get("success"):
-            self.log(f"Macro finished: {macro.name}")
-        else:
-            self.log(f"Macro finished with failed steps: {macro.name}")
-        return result
-
-    @staticmethod
-    def _macro_post_verify_prompt(user_goal, macro, runtime_values, result):
-        summary = {
-            "macro": macro.name,
-            "runtime_values": runtime_values,
-            "macro_success": bool(result.get("success")),
-            "failed_step": result.get("failed_step"),
-            "step_count": result.get("step_count"),
-        }
-        return (
-            "Macro strict flow has just finished. Before declaring the task complete, "
-            "perform one Auto ReAct verification against the current live SAP screen.\n\n"
-            "Rules:\n"
-            "1. Treat the current SAP screen as the source of truth.\n"
-            "2. Original user goal must be satisfied, not only the macro End condition.\n"
-            "3. If the screen is still a selection/input screen and the user asked to query/list/display results, "
-            "execute the safe next action such as Enter/F8/Execute when appropriate.\n"
-            "4. Do not restart the same T-Code or re-fill fields that already match unless the screen clearly shows incorrect values.\n"
-            "5. If the goal is already satisfied, answer briefly with the visible result/state.\n"
-            "6. If more information is needed, ask one concise follow-up question.\n\n"
-            f"Original user goal:\n{user_goal}\n\n"
-            f"Macro summary:\n{json.dumps(summary, ensure_ascii=False)}"
-        )
-
-    def _run_macro_post_react_check(self, text, macro, runtime_values, result):
-        if not env_enabled("SAP_MACRO_POST_REACT_VERIFY", "true"):
-            return ""
-        self.log("Macro post-check: running Auto ReAct verification before final completion.")
-        response = self.agent.process_message(
-            self._session(),
-            self._macro_post_verify_prompt(text, macro, runtime_values, result),
-        )
-        self.log(f"AI:\n{response}")
-        return response
-
-    def _run_matched_macro(self, text):
-        if self.agent.mode != "auto":
-            return False
-        match = self.macro_library.match_request(text)
-        if not match:
-            return False
-        macro = match["macro"]
-        reasons = ", ".join(match.get("reasons") or [])
-        self.log(f"Macro matched: {macro.name} (score={match.get('score')}, reasons={reasons})")
-        self.log("Using Macro strict flow directly; skipping Auto ReAct iterations.")
-        if macro.mode == "study":
-            raise SAPMacroError("Matched macro is mode=study. Use /macro study or /study --macro.")
-        runtime_values = self._macro_values(macro, match.get("values") or {})
-        result = self.macro_library.execute_macro(
-            self._session(),
-            self.agent,
-            macro,
-            runtime_values,
-            log_callback=lambda line: self.log(f"  {line}"),
-        )
-        result["runtime_values"] = runtime_values
-        if result.get("success"):
-            self.log(f"Macro strict flow finished: {macro.name}")
-            self._run_macro_post_react_check(text, macro, runtime_values, result)
-        else:
-            self.log(f"Macro finished with failed steps: {macro.name}")
-            if macro_result_can_fallback_to_auto(result):
-                self.log("Macro failed before field/button mutation; falling back to Auto ReAct.")
-                return False
-        return True
-
-    def _run_macro_study(self, arg):
-        self._ensure_ready()
-        name, values = self.macro_library.parse_values(arg)
-        if not name:
-            self.log("Usage: /macro study <macro-name> key=value ...")
-            return
-        macro = self.macro_library.load_macro(name)
-        runtime_values = self._macro_values(macro, values)
-        context = self.macro_library.format_study_context(macro, runtime_values)
-        self.log(f"Study Macro: {macro.name}")
-        if macro.mode == "auto":
-            self.log("Note: this macro is mode=auto; Study will use it only as guidance.")
-        self.agent.set_mode("study")
-        self.study_context = context
-        response = self.agent.process_message(
-            self._session(),
-            "Use the following Structured Macro to guide the user interactively from the first step.",
-            extra_context=context,
-        )
-        self.log(f"AI:\n{response}")
-        self.log("Study Mode remains active. Use Auto/Ask/Solve buttons or /auto to leave Study Mode.")
-
-    def _handle_macro_command(self, arg):
-        self._ensure_ready()
-        parts = str(arg or "").strip().split(maxsplit=1)
-        if not parts:
-            self.log("Usage: /macros | /macro show <name> | /macro run <name> key=value ... | /macro study <name> key=value ... | /macro learn recordings | /macro audit <name> | /macro doctor <name>")
-            return
-        subcommand = parts[0].lower()
-        rest = parts[1].strip() if len(parts) > 1 else ""
-        try:
-            if subcommand in {"list", "ls"}:
-                self._show_macros()
-            elif subcommand == "show":
-                name, _values = self.macro_library.parse_values(rest)
-                if not name:
-                    self.log("Usage: /macro show <name>")
-                    return
-                self.log(self.macro_library.format_summary(self.macro_library.load_macro(name)))
-            elif subcommand == "run":
-                self._run_macro(rest)
-            elif subcommand == "study":
-                self._run_macro_study(rest)
-            elif subcommand == "learn":
-                target = rest or "recordings"
-                if target.lower() != "recordings":
-                    raise SAPMacroError("Only /macro learn recordings is supported.")
-                summary = self.macro_library.learn_from_recordings("recordings")
-                self.log("Macro Learn Recordings:\n" + json.dumps(summary, ensure_ascii=False, indent=2))
-            elif subcommand == "audit":
-                name, _values = self.macro_library.parse_values(rest)
-                if not name:
-                    self.log("Usage: /macro audit <name>")
-                    return
-                self.log(self.macro_library.audit_macro(name))
-            elif subcommand == "doctor":
-                name, _values = self.macro_library.parse_values(rest)
-                if not name:
-                    self.log("Usage: /macro doctor <name>")
-                    return
-                self.log(self.macro_library.doctor_macro(self._session(), self.agent, name))
-            else:
-                self._run_macro(arg)
-        except (FileNotFoundError, SAPMacroError) as exc:
-            self.log(f"Macro failed: {exc}")
-
     def _run_study(self, goal):
         self._ensure_ready()
-        raw_goal = str(goal or "").strip()
-        if raw_goal.lower().startswith(("--macro ", "/macro ")):
-            macro_arg = raw_goal.split(maxsplit=1)[1].strip() if len(raw_goal.split(maxsplit=1)) > 1 else ""
-            self._run_macro_study(macro_arg)
-            return
         goal, allow_draft_study, save_draft_skill = parse_study_request(goal)
+        _, goal = SAPSkillLibrary.parse_module_prefix(goal)
         if not goal:
-            self.log("Usage: /study [SOP name] | /study --draft [goal] | /study --save-draft [goal]")
+            self.log(SAPSkillLibrary.format_module_list())
             return
         initial_screen = None
         try:
@@ -1168,12 +1053,15 @@ class SAPCopilotWorker(threading.Thread):
         elif skill_data.get("format") == "markdown" and skill_data.get("sop_text"):
             sop_text = skill_data["sop_text"]
             request = "Use the following SOP reference to guide the user interactively."
+            self.study_skill_name = goal
         else:
             sop_text = self.skill_library.get_skill_summary(goal)
             request = "Use the following SOP reference to guide the user interactively."
+            self.study_skill_name = goal
 
         self.log(f"Study Mode: {goal}")
         if not skill_found:
+            self.study_skill_name = ""
             if save_draft_skill:
                 self.log("Exploratory draft mode is enabled. This session will be saved as a draft skill.")
             else:
@@ -1204,19 +1092,426 @@ class SAPCopilotWorker(threading.Thread):
             self.log(f"Study Mode failed: {exc}")
 
 
+# ── Study Step 自訂 Dialog ────────────────────────────────────────────────────
+
+class StudyStepDialog(tk.Toplevel):
+    """
+    Study Mode 步驟引導 dialog。
+    - 藍色標題列顯示步驟編號
+    - 主要說明文字（壓縮過的 instruction）
+    - 若有目前欄位值則以灰底小框顯示
+    - 回覆輸入框 + OK / 略過 按鈕
+    """
+
+    # SAP 藍色系
+    _HDR_BG   = "#003399"
+    _HDR_FG   = "#ffffff"
+    _BODY_BG  = "#f8f9fb"
+    _VAL_BG   = "#e8ecf2"
+    _WARN_FG  = "#c75000"
+    _BTN_OK   = "#003399"
+    _BTN_FG   = "#ffffff"
+    _BTN_SKIP = "#e0e4ef"
+    _BTN_SKIP_FG = "#333333"
+
+    def __init__(self, parent, step_title: str, body,
+                 current_value: str = "", warn: str = ""):
+        super().__init__(parent)
+        self.result: str = ""
+        self.title("Study Step")
+        self.resizable(False, False)
+        self.configure(bg=self._BODY_BG)
+
+        # 置中於父視窗
+        self.transient(parent)
+        self.grab_set()
+
+        self._build(step_title, body, current_value, warn)
+
+        # 等視窗繪製完畢後置中
+        self.update_idletasks()
+        w, h = self.winfo_width(), self.winfo_height()
+        pw, ph = parent.winfo_width(), parent.winfo_height()
+        px, py = parent.winfo_rootx(), parent.winfo_rooty()
+        self.geometry(f"+{px + (pw - w) // 2}+{py + (ph - h) // 2}")
+
+        self._entry.focus_set()
+        self.bind("<Return>", lambda _: self._on_ok())
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        self.wait_window(self)
+
+    def _build(self, step_title, body, current_value, warn):
+        # ── 標題列 ──────────────────────────────────────
+        hdr = tk.Frame(self, bg=self._HDR_BG, pady=10, padx=16)
+        hdr.pack(fill="x")
+        tk.Label(
+            hdr, text=step_title,
+            bg=self._HDR_BG, fg=self._HDR_FG,
+            font=("Segoe UI", 11, "bold"), anchor="w", wraplength=500,
+        ).pack(fill="x")
+
+        # ── 內容區 ──────────────────────────────────────
+        body_frame = tk.Frame(self, bg=self._BODY_BG, padx=14, pady=10)
+        body_frame.pack(fill="both", expand=True)
+
+        # 說明文字（捲動式，依行數自動調整高度，最多 15 行）
+        if body:
+            # body 可能是 list[DisplayLine] 或舊式 str
+            if isinstance(body, str):
+                body = compress_for_display(body)
+            line_count = len(body)
+            txt_height = max(3, min(15, line_count + 1))
+            txt = ScrolledText(
+                body_frame,
+                font=("Segoe UI", 10),
+                bg=self._BODY_BG, fg="#1a1a1a",
+                relief="flat", bd=0,
+                wrap="word",
+                height=txt_height,
+                state="normal",
+                padx=2, pady=2,
+            )
+            # 設定顏色 tag
+            txt.tag_configure("heading",     font=("Segoe UI", 10, "bold"), foreground="#1a1a1a")
+            txt.tag_configure("body",        foreground="#333333")
+            txt.tag_configure("req_section", font=("Segoe UI", 9, "bold"),  foreground="#c0392b")
+            txt.tag_configure("req",         foreground="#c0392b")
+            txt.tag_configure("opt_section", font=("Segoe UI", 9, "bold"),  foreground="#888888")
+            txt.tag_configure("opt",         foreground="#888888")
+            # 逐行插入並套用 tag
+            for kind, line_text in body:
+                txt.insert("end", line_text + "\n", kind)
+            txt.config(state="disabled")
+            txt.pack(fill="both", expand=True, pady=(0, 6))
+
+        # 目前欄位值
+        if current_value:
+            val_frame = tk.Frame(body_frame, bg="#fef3c7", padx=10, pady=6)
+            val_frame.pack(fill="x", pady=(0, 6))
+            tk.Label(
+                val_frame, text=f"目前值：{current_value}",
+                bg="#fef3c7", fg="#b45309",
+                font=("Segoe UI", 10, "bold"), anchor="w",
+            ).pack(fill="x")
+
+        # 無法定位元件警告
+        if warn:
+            tk.Label(
+                body_frame, text=f"⚠  {warn}",
+                bg=self._BODY_BG, fg=self._WARN_FG,
+                font=("Segoe UI", 9), anchor="w",
+            ).pack(fill="x", pady=(0, 4))
+
+        # 提示文字
+        tk.Label(
+            body_frame,
+            text="完成後按 OK；有問題可直接輸入；/skip 略過；/done 結束",
+            bg=self._BODY_BG, fg="#888",
+            font=("Segoe UI", 8), anchor="w",
+        ).pack(fill="x", pady=(2, 4))
+
+        # 輸入框
+        self._entry = tk.Entry(body_frame, font=("Segoe UI", 10), relief="solid", bd=1)
+        self._entry.pack(fill="x", ipady=5)
+
+        # 分隔線 + 按鈕列
+        tk.Frame(self, height=1, bg="#cdd3e0").pack(fill="x")
+
+        btn_row = tk.Frame(self, bg=self._BODY_BG, padx=16, pady=10)
+        btn_row.pack(fill="x")
+
+        tk.Button(
+            btn_row, text="略過", width=7,
+            bg=self._BTN_SKIP, fg=self._BTN_SKIP_FG,
+            font=("Segoe UI", 9), relief="flat", bd=0,
+            activebackground="#ccd5ea",
+            command=self._on_skip,
+        ).pack(side="right", padx=(6, 0))
+
+        tk.Button(
+            btn_row, text="OK", width=9,
+            bg=self._BTN_OK, fg=self._BTN_FG,
+            font=("Segoe UI", 9, "bold"), relief="flat", bd=0,
+            activebackground="#0044bb",
+            command=self._on_ok,
+        ).pack(side="right")
+
+    def _on_ok(self):
+        self.result = self._entry.get().strip()
+        self.destroy()
+
+    def _on_skip(self):
+        self.result = "/skip"
+        self.destroy()
+
+    def _on_cancel(self):
+        self.result = ""
+        self.destroy()
+
+
+# 五大模組顏色（對應 UI 色條）
+MODULE_COLORS = {
+    "MM": "#26C6DA",   # 青藍
+    "SD": "#66BB6A",   # 綠
+    "FI": "#FFA726",   # 橙黃
+    "CO": "#EF5350",   # 紅
+    "PP": "#7E57C2",   # 紫
+}
+
+
+def _center_on_parent(dialog, parent):
+    dialog.update_idletasks()
+    w, h = dialog.winfo_width(), dialog.winfo_height()
+    pw, ph = parent.winfo_width(), parent.winfo_height()
+    px, py = parent.winfo_rootx(), parent.winfo_rooty()
+    dialog.geometry(f"+{px + (pw - w) // 2}+{py + (ph - h) // 2}")
+
+
+# ── 模組選擇 Dialog ───────────────────────────────────────────────────────────
+
+class ModuleSelectDialog(tk.Toplevel):
+    """
+    五大 SAP 模組選擇，每列左側有模組專屬色條。
+    result: 模組代碼字串（"MM" / "SD" / ...），或 "" 表示取消。
+    """
+    _HDR_BG  = "#003399"
+    _HDR_FG  = "#ffffff"
+    _BG      = "#f8f9fb"
+    _ROW_BG  = "#ffffff"
+    _ROW_HOV = "#eef2fa"
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.result: str = ""
+        self.title("開始教學")
+        self.resizable(False, False)
+        self.configure(bg=self._BG)
+        self.transient(parent)
+        self.grab_set()
+        self._build()
+        _center_on_parent(self, parent)
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.wait_window(self)
+
+    def _build(self):
+        tk.Frame(self, bg=self._HDR_BG, padx=16, pady=10).pack(fill="x")
+        hdr = self.winfo_children()[-1]
+        tk.Label(hdr, text="選擇模組", bg=self._HDR_BG, fg=self._HDR_FG,
+                 font=("Segoe UI", 12, "bold"), anchor="w").pack(fill="x")
+
+        content = tk.Frame(self, bg=self._BG, padx=14, pady=12)
+        content.pack(fill="both", expand=True)
+
+        from sap_skill_library import SAP_MODULES
+        for code, info in SAP_MODULES.items():
+            color = MODULE_COLORS.get(code, "#888")
+            self._row(content, code, info["name"], info["description"], color)
+
+        tk.Frame(self, height=1, bg="#cdd3e0").pack(fill="x")
+        btn_bar = tk.Frame(self, bg=self._BG, padx=14, pady=8)
+        btn_bar.pack(fill="x")
+        tk.Button(btn_bar, text="取消", font=("Segoe UI", 9),
+                  bg="#e0e4ef", fg="#333", relief="flat", bd=0,
+                  activebackground="#ccd5ea", command=self.destroy,
+                  width=8, cursor="hand2").pack(side="right")
+
+    def _row(self, parent, code, name, desc, color):
+        outer = tk.Frame(parent, bg=self._ROW_BG, cursor="hand2",
+                         relief="solid", bd=1)
+        outer.pack(fill="x", pady=(0, 7))
+
+        # 色條 — 保存引用，hover 時絕不碰它
+        stripe = tk.Frame(outer, bg=color, width=5)
+        stripe.pack(side="left", fill="y")
+
+        inner = tk.Frame(outer, bg=self._ROW_BG, padx=10, pady=9)
+        inner.pack(side="left", fill="both", expand=True)
+
+        top = tk.Frame(inner, bg=self._ROW_BG)
+        top.pack(fill="x")
+        tk.Label(top, text=code, font=("Segoe UI", 11, "bold"),
+                 fg=color, bg=self._ROW_BG, width=4, anchor="w").pack(side="left")
+        tk.Label(top, text=name, font=("Segoe UI", 10, "bold"),
+                 fg="#1a1a1a", bg=self._ROW_BG, anchor="w").pack(side="left")
+        tk.Label(inner, text=desc, font=("Segoe UI", 9),
+                 fg="#777", bg=self._ROW_BG, anchor="w").pack(fill="x")
+
+        def _select(c=code):
+            self.result = c
+            self.destroy()
+
+        def _enter(e, i=inner):
+            # 只改 inner，色條 stripe 完全不動
+            i.configure(bg=self._ROW_HOV)
+            for w in _all_children(i):
+                _try_bg(w, self._ROW_HOV)
+
+        def _leave(e, i=inner):
+            i.configure(bg=self._ROW_BG)
+            for w in _all_children(i):
+                _try_bg(w, self._ROW_BG)
+
+        # 點擊與 hover 綁定到 outer + inner（跳過 stripe）
+        for w in [outer, inner] + _all_children(inner):
+            w.bind("<Button-1>", lambda e, fn=_select: fn())
+            w.bind("<Enter>", _enter)
+            w.bind("<Leave>", _leave)
+
+
+# ── TCode 查詢 + 輸入 Dialog ──────────────────────────────────────────────────
+
+class SkillSelectDialog(tk.Toplevel):
+    """
+    列出模組的 TCode 清單（純文字參考），使用者自行輸入想學的 TCode。
+    result: goal 字串，或 "" 表示取消。
+    """
+    _HDR_BG  = "#003399"
+    _HDR_FG  = "#ffffff"
+    _BG      = "#f8f9fb"
+
+    def __init__(self, parent, module_code: str, module_name: str,
+                 tcode_rows: list):
+        """
+        tcode_rows: list of (tcode, zh_name, has_skill)
+        """
+        super().__init__(parent)
+        self.result: str = ""
+        self._entry_var = tk.StringVar()
+        self.title("選擇 TCode")
+        self.resizable(False, False)
+        self.configure(bg=self._BG)
+        self.transient(parent)
+        self.grab_set()
+        self._build(module_code, module_name, tcode_rows)
+        _center_on_parent(self, parent)
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self._entry.focus_set()
+        self.bind("<Return>", lambda _: self._confirm())
+        self.wait_window(self)
+
+    def _build(self, module_code, module_name, tcode_rows):
+        color = MODULE_COLORS.get(module_code, "#003399")
+
+        # 標題
+        hdr = tk.Frame(self, bg=self._HDR_BG, padx=16, pady=10)
+        hdr.pack(fill="x")
+        # 色條放在標題右端
+        tk.Label(hdr, text=f"{module_code}", font=("Segoe UI", 13, "bold"),
+                 fg=color, bg=self._HDR_BG, anchor="w").pack(side="left")
+        tk.Label(hdr, text=f"  {module_name}",
+                 font=("Segoe UI", 11, "bold"),
+                 fg=self._HDR_FG, bg=self._HDR_BG, anchor="w").pack(side="left")
+
+        content = tk.Frame(self, bg=self._BG, padx=16, pady=10)
+        content.pack(fill="both", expand=True)
+
+        # TCode 列表（捲動文字框）
+        tk.Label(content, text="可教學的 TCode",
+                 font=("Segoe UI", 9, "bold"), fg="#003399",
+                 bg=self._BG, anchor="w").pack(fill="x", pady=(0, 4))
+
+        list_frame = tk.Frame(content, bg=self._BG)
+        list_frame.pack(fill="x")
+
+        txt = ScrolledText(list_frame, font=("Consolas", 10),
+                           bg="#ffffff", fg="#1a1a1a",
+                           relief="solid", bd=1,
+                           wrap="none", height=min(len(tcode_rows) + 1, 12),
+                           state="normal", padx=8, pady=6,
+                           cursor="arrow")
+        txt.tag_configure("has",  foreground="#1a1a1a")
+        txt.tag_configure("miss", foreground="#b0b0b0")
+        txt.tag_configure("tick", foreground=color, font=("Consolas", 10, "bold"))
+        txt.tag_configure("code", foreground="#003399", font=("Consolas", 10, "bold"))
+
+        for tcode, zh_name, has_skill in tcode_rows:
+            if has_skill:
+                txt.insert("end", "✓ ", "tick")
+                txt.insert("end", f"{tcode:<10}", "code")
+                txt.insert("end", f"{zh_name}\n", "has")
+            else:
+                txt.insert("end", "  ")
+                txt.insert("end", f"{tcode:<10}", "miss")
+                txt.insert("end", f"{zh_name}\n", "miss")
+
+        # 點擊行 → 填入 input
+        def _on_click(event):
+            idx = txt.index(f"@{event.x},{event.y}")
+            line_start = f"{idx.split('.')[0]}.0"
+            line_end   = f"{idx.split('.')[0]}.end"
+            line_text  = txt.get(line_start, line_end).strip()
+            # 取第一個 token（TCode），去掉 ✓ 前綴
+            tokens = line_text.lstrip("✓ ").split()
+            if tokens:
+                self._entry_var.set(tokens[0])
+                self._entry.focus_set()
+                self._entry.select_range(0, "end")
+
+        txt.bind("<Button-1>", _on_click)
+        txt.config(state="disabled")
+        txt.pack(fill="x")
+
+        # 輸入區
+        tk.Label(content, text="輸入 TCode 開始教學：",
+                 font=("Segoe UI", 9, "bold"), fg="#333",
+                 bg=self._BG, anchor="w").pack(fill="x", pady=(12, 4))
+
+        self._entry = tk.Entry(content, textvariable=self._entry_var,
+                               font=("Segoe UI", 11), relief="solid", bd=1)
+        self._entry.pack(fill="x", ipady=5)
+
+        # 按鈕
+        tk.Frame(self, height=1, bg="#cdd3e0").pack(fill="x")
+        btn_bar = tk.Frame(self, bg=self._BG, padx=16, pady=10)
+        btn_bar.pack(fill="x")
+
+        tk.Button(btn_bar, text="取消", font=("Segoe UI", 9),
+                  bg="#e0e4ef", fg="#333", relief="flat", bd=0,
+                  activebackground="#ccd5ea", command=self.destroy,
+                  width=8, cursor="hand2").pack(side="right", padx=(6, 0))
+        tk.Button(btn_bar, text="開始教學", font=("Segoe UI", 9, "bold"),
+                  bg="#003399", fg="#fff", relief="flat", bd=0,
+                  activebackground="#0044bb", command=self._confirm,
+                  width=10, cursor="hand2").pack(side="right")
+
+    def _confirm(self):
+        val = self._entry_var.get().strip()
+        if val:
+            self.result = val
+            self.destroy()
+
+
+# ── 輔助函式 ──────────────────────────────────────────────────────────────────
+
+def _all_children(widget):
+    kids = list(widget.winfo_children())
+    for k in list(kids):
+        kids.extend(_all_children(k))
+    return kids
+
+
+def _try_bg(widget, color):
+    try:
+        widget.configure(bg=color)
+    except tk.TclError:
+        pass
+
+
 class SAPCopilotUI:
     def __init__(self, root):
         self.root = root
         self.root.title(f"SAP GUI Copilot {APP_VERSION}")
-        self.root.geometry("760x620")
-        self.root.minsize(560, 420)
+        self.root.geometry("640x520")
+        self.root.minsize(520, 400)
+        self.root.configure(bg=THEME["bg"])
+        self._configure_theme()
 
         self.outbound_queue = queue.Queue()
         self.worker = SAPCopilotWorker(self.outbound_queue)
 
-        self.mode_var = tk.StringVar(value="Auto")
-        self.sap_var = tk.StringVar(value="SAP: connecting...")
-        self.model_var = tk.StringVar(value="Model: -")
+        self.mode_var = tk.StringVar(value="● Auto Mode")
+        self.sap_var = tk.StringVar(value="○ not connected")
+        self.model_var = tk.StringVar(value="-")
         self.recording_var = tk.StringVar(value="")
         self.always_on_top_var = tk.BooleanVar(value=True)
 
@@ -1227,107 +1522,203 @@ class SAPCopilotUI:
         self.worker.start()
         self.root.after(100, self._poll_worker)
 
-    def _build_widgets(self):
-        self.root.configure(bg=UI_COLORS["bg"])
-        style = ttk.Style(self.root)
+    def _configure_theme(self):
+        self.style = ttk.Style(self.root)
         try:
-            style.theme_use("clam")
+            self.style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("App.TFrame", background=UI_COLORS["bg"])
-        style.configure("Panel.TFrame", background=UI_COLORS["panel"])
-        style.configure("App.TLabel", background=UI_COLORS["bg"], foreground=UI_COLORS["text"])
-        style.configure("Panel.TLabel", background=UI_COLORS["panel"], foreground=UI_COLORS["text"])
-        style.configure("Title.TLabel", background=UI_COLORS["bg"], foreground=UI_COLORS["accent"], font=("Segoe UI", 14, "bold"))
-        style.configure("Version.TLabel", background=UI_COLORS["bg"], foreground=UI_COLORS["muted"], font=("Segoe UI", 8))
-        style.configure("Status.TLabel", background=UI_COLORS["panel"], foreground=UI_COLORS["system"], font=("Segoe UI", 9))
-        style.configure("Mode.TLabel", background=UI_COLORS["panel"], foreground=UI_COLORS["macro"], font=("Segoe UI", 9, "bold"))
-        style.configure("App.TButton", background=UI_COLORS["surface"], foreground=UI_COLORS["text"], padding=(10, 5))
-        style.configure("Primary.TButton", background="#cf3d00", foreground="#ffffff", padding=(14, 8))
-        style.map("Primary.TButton", background=[("active", "#a83200")], foreground=[("active", "#ffffff")])
 
-        outer = ttk.Frame(self.root, padding=10, style="App.TFrame")
+        
+        output_font = ("Consolas", 9)
+        default_font = ("Segoe UI", 9, "bold")
+
+        self.root.option_add("*Font", default_font)
+        self.root.option_add("*TCombobox*Listbox.font", default_font)
+
+        self.style.configure(".", font=default_font)
+        self.style.configure("TFrame", background=THEME["bg"])
+        self.style.configure("Panel.TFrame", background=THEME["panel"], relief="flat")
+        self.style.configure("Header.TFrame", background=THEME["panel"])
+        self.style.configure("Toolbar.TFrame", background=THEME["bg"])
+        self.style.configure("Input.TFrame", background=THEME["input_bg"])
+
+        self.style.configure("TLabel", background=THEME["bg"], foreground=THEME["text"])
+        self.style.configure("Version.TLabel", background=THEME["panel"], foreground=THEME["muted"], font=("Segoe UI", 7, "bold"))
+        self.style.configure("ModeStatus.TLabel", background=THEME["panel"], foreground=THEME["purple"], font=("Segoe UI", 8, "bold"))
+        self.style.configure("SapStatus.TLabel", background=THEME["panel"], foreground=THEME["green"], font=("Segoe UI", 8, "bold"))
+        self.style.configure("ModelStatus.TLabel", background=THEME["panel"], foreground=THEME["muted"], font=("Segoe UI", 8, "bold"))
+        self.style.configure("Recording.TLabel", background=THEME["bg"], foreground=THEME["danger"], font=("Segoe UI", 8, "bold"))
+
+        self.style.configure("TCheckbutton", background=THEME["bg"], foreground=THEME["muted"])
+        self.style.configure("TRadiobutton", background=THEME["panel"], foreground=THEME["text"])
+        self.style.configure("TLabelFrame", background=THEME["panel"], bordercolor=THEME["border"])
+        
+        self.style.configure(
+            "TEntry",
+            fieldbackground=THEME["output_bg"],
+            foreground=THEME["text"],
+            bordercolor=THEME["border"],
+            font=default_font,
+        )
+        self.output_font = output_font
+
+    # 功能
+    def _flat_button(self, parent, text, command, *, fg=None, bg=None, width=None):
+        return tk.Button(
+            parent,
+            text=text,
+            command=command,
+            font=("Segoe UI", 9, "bold"),
+            fg=fg or THEME["text"],
+            bg=bg or THEME["button_bg"],
+            activeforeground=fg or THEME["text"],
+            activebackground=THEME["button_active"],
+            relief=tk.FLAT,
+            borderwidth=0,
+            padx=8,
+            pady=5,
+            cursor="hand2",
+            width=width or 8,
+        )
+
+    def _build_widgets(self):
+        outer = ttk.Frame(self.root, padding=14, style="TFrame")
         outer.pack(fill=tk.BOTH, expand=True)
 
-        header = ttk.Frame(outer, style="App.TFrame")
-        header.pack(fill=tk.X)
-        ttk.Label(header, text="SAP GUI Copilot", style="Title.TLabel").pack(side=tk.LEFT)
-        ttk.Label(header, text=f"v{APP_VERSION}", style="Version.TLabel").pack(side=tk.LEFT, padx=(8, 0), pady=(4, 0))
-        ttk.Checkbutton(
-            header,
-            text="Top",
+        header = ttk.Frame(outer, padding=(14, 12), style="Header.TFrame")
+        header.pack(fill=tk.X, pady=(0, 8))
+        title_block = ttk.Frame(header, style="Header.TFrame")
+        title_block.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # 標題
+        title_row = ttk.Frame(title_block, style="Header.TFrame")
+        title_row.pack(anchor=tk.W)
+        tk.Label(
+            title_row,
+            text="SAP GUI Copilot",
+            font=("Segoe UI", 20, "bold"),
+            fg=THEME["accent"],
+            bg=THEME["panel"],
+        ).pack(side=tk.LEFT)
+        ttk.Label(title_row, text=f" v{APP_VERSION}", style="Version.TLabel").pack(side=tk.LEFT, padx=(10, 0), pady=(20, 0))
+
+        status = ttk.Frame(title_block, style="Header.TFrame")
+        status.pack(fill=tk.X, pady=(24, 0))
+        ttk.Label(status, textvariable=self.mode_var, style="ModeStatus.TLabel").pack(side=tk.LEFT)
+        ttk.Label(status, textvariable=self.sap_var, style="SapStatus.TLabel").pack(side=tk.LEFT, padx=(20, 0))
+
+        # TOP(功能)
+        header_actions = ttk.Frame(header, style="Header.TFrame")
+        header_actions.pack(side=tk.RIGHT, anchor=tk.N)
+        top_button = tk.Checkbutton(
+            header_actions,
+            text="📌 Top",
             variable=self.always_on_top_var,
             command=self._toggle_topmost,
-        ).pack(side=tk.RIGHT, padx=(8, 0))
-        ttk.Button(header, text="Connect", style="App.TButton", command=self._connect_dialog).pack(side=tk.RIGHT)
+            indicatoron=False,
+            font=("Segoe UI", 10, "bold"),
+            fg=THEME["accent_dark"],
+            bg=THEME["button_bg"],
+            activeforeground=THEME["accent_dark"],
+            activebackground=THEME["button_active"],
+            selectcolor=THEME["button_bg"],
+            relief=tk.FLAT,
+            borderwidth=0,
+            padx=12,
+            pady=9,
+            cursor="hand2",
+        )
+        top_button.pack(side=tk.LEFT, padx=(0, 6))
+        self._flat_button(
+            header_actions,
+            "⟳ Connect",
+            self._connect_dialog,
+            fg=THEME["blue"],
+            width=10,
+        ).pack(side=tk.LEFT)
+        ttk.Label(header_actions, textvariable=self.model_var, style="ModelStatus.TLabel").pack(anchor=tk.E, pady=(22, 0))
 
-        status = ttk.Frame(outer, padding=(10, 8), style="Panel.TFrame")
-        status.pack(fill=tk.X, pady=(8, 8))
-        ttk.Label(status, textvariable=self.mode_var, width=14, style="Mode.TLabel").pack(side=tk.LEFT)
-        ttk.Label(status, textvariable=self.sap_var, style="Status.TLabel").pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Label(status, textvariable=self.model_var, style="Status.TLabel").pack(side=tk.RIGHT)
-
-        modes = ttk.Frame(outer, style="App.TFrame")
-        modes.pack(fill=tk.X, pady=(0, 8))
-        for mode in ("auto", "ask", "solve"):
-            ttk.Button(
+        modes = ttk.Frame(outer, style="Toolbar.TFrame")
+        modes.pack(fill=tk.X, pady=(0, 6))
+        mode_buttons = [
+            ("● Auto", "auto", THEME["purple"]),
+            ("● Ask", "ask", THEME["green_dark"]),
+        ]
+        for label, mode, color in mode_buttons:
+            self._flat_button(
                 modes,
-                text=MODE_LABELS[mode],
-                style="App.TButton",
+                label,
                 command=lambda item=mode: self.worker.submit("set_mode", mode=item),
-            ).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(modes, text="Study", style="App.TButton", command=self._study_dialog).pack(side=tk.LEFT, padx=(0, 6))
+                fg=color,
+            ).pack(side=tk.LEFT, padx=(0, 4))
+        self._flat_button(modes, "▣ Study", self._study_dialog, fg=THEME["blue"]).pack(side=tk.LEFT, padx=(0, 4))
+        self._flat_button(modes, "⏺ Record", self._record_dialog, fg=THEME["danger"]).pack(side=tk.LEFT, padx=(0, 4))
 
-        actions = ttk.Frame(outer, style="App.TFrame")
+        actions = ttk.Frame(outer, style="Toolbar.TFrame")
         actions.pack(fill=tk.X, pady=(0, 8))
-        ttk.Button(actions, text="Scan", style="App.TButton", command=lambda: self.worker.submit("scan")).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(actions, text="Inspect", style="App.TButton", command=lambda: self.worker.submit("inspect_table")).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(actions, text="MCP", style="App.TButton", command=lambda: self.worker.submit("mcp_probe")).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(actions, text="Reset", style="App.TButton", command=lambda: self.worker.submit("reset")).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(actions, text="Record", style="App.TButton", command=self._record_dialog).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(actions, text="Stop", style="App.TButton", command=lambda: self.worker.submit("stop_record")).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(actions, text="SOP", style="App.TButton", command=lambda: self.worker.submit("recordings")).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(actions, text="Macro", style="App.TButton", command=self._macro_dialog).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Label(actions, textvariable=self.recording_var, style="App.TLabel").pack(side=tk.RIGHT)
+        self._flat_button(actions, "🔍 Scan", lambda: self.worker.submit("scan")).pack(side=tk.LEFT, padx=(0, 4))
+        self._flat_button(actions, "↺ Reset", lambda: self.worker.submit("reset")).pack(side=tk.LEFT, padx=(0, 4))
+        self._flat_button(actions, "■ Stop", lambda: self.worker.submit("stop_record"), fg=THEME["danger"]).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Label(actions, textvariable=self.recording_var, style="Recording.TLabel").pack(side=tk.RIGHT)
 
         self.output = ScrolledText(
             outer,
             wrap=tk.WORD,
-            height=20,
-            font=("Segoe UI", 10),
-            bg=UI_COLORS["panel"],
-            fg=UI_COLORS["text"],
-            insertbackground=UI_COLORS["text"],
+            height=6,
+            font=self.output_font,
+            bg=THEME["output_bg"],
+            fg=THEME["text"],
+            insertbackground=THEME["accent"],
+            selectbackground=THEME["accent_soft"],
             relief=tk.SOLID,
-            bd=1,
-            padx=10,
-            pady=8,
+            borderwidth=1,
+            padx=12,
+            pady=12,
         )
         self.output.pack(fill=tk.BOTH, expand=True)
+        self.output.tag_configure("timestamp", foreground="#B4AAA1", font=self.output_font)
+        self.output.tag_configure("you", foreground=THEME["blue"], font=self.output_font)
+        self.output.tag_configure("ai", foreground=THEME["green"], font=self.output_font)
         self.output.configure(state=tk.DISABLED)
-        self._configure_output_tags()
 
-        input_row = ttk.Frame(outer, style="App.TFrame")
-        input_row.pack(fill=tk.X, pady=(8, 0))
+        input_row = ttk.Frame(outer, padding=(0, 0), style="Input.TFrame")
+        input_row.pack(fill=tk.X, pady=(10, 0))
         self.input_text = tk.Text(
             input_row,
-            height=3,
+            height=2,
             wrap=tk.WORD,
-            font=("Segoe UI", 10),
-            bg="#fffdf8",
-            fg=UI_COLORS["text"],
-            insertbackground=UI_COLORS["text"],
-            relief=tk.SOLID,
-            bd=1,
-            padx=8,
-            pady=6,
+            font=("Segoe UI", 9, "bold"),
+            bg=THEME["input_bg"],
+            fg=THEME["text"],
+            insertbackground=THEME["accent"],
+            selectbackground=THEME["accent_soft"],
+            relief=tk.FLAT,
+            borderwidth=0,
+            padx=10,
+            pady=10,
         )
         self.input_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.input_text.bind("<Control-Return>", lambda _event: self.send())
         self.input_text.bind("<Return>", self._return_key)
-        ttk.Button(input_row, text="發送 ↵", style="Primary.TButton", command=self.send).pack(side=tk.LEFT, padx=(8, 0), fill=tk.Y)
+        send_button = tk.Button(
+            input_row,
+            text="發送\n↵",
+            command=self.send,
+            font=("Segoe UI", 9, "bold"),
+            fg="#FFFFFF",
+            bg=THEME["accent"],
+            activeforeground="#FFFFFF",
+            activebackground=THEME["accent_dark"],
+            relief=tk.FLAT,
+            borderwidth=0,
+            padx=14,
+            pady=4,
+            cursor="hand2",
+        )
+        send_button.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self._print_terminal_log("UI ready. Use buttons or commands like /scan, /mcp, /ask, /solve, /recordings, /macro.")
+        self._append("UI ready. Use buttons or commands like /scan, /mcp, /ask, /solve, /recordings.\n")
 
     def _toggle_topmost(self):
         self.root.attributes("-topmost", bool(self.always_on_top_var.get()))
@@ -1344,23 +1735,48 @@ class SAPCopilotUI:
             self.worker.submit("record", name=name.strip())
 
     def _study_dialog(self):
-        goal = simpledialog.askstring("Study", "SOP name, or --draft goal:", parent=self.root)
-        if goal:
-            self.worker.submit("study", goal=goal.strip())
+        import re as _re
+        from sap_skill_library import SAP_MODULES
 
-    def _macro_dialog(self):
-        arg = simpledialog.askstring(
-            "Macro",
-            "list | show <name> | run <name> key=value ... | study <name> key=value ...:",
-            parent=self.root,
+        # Step 1: 選模組
+        mod_dlg = ModuleSelectDialog(self.root)
+        module_code = mod_dlg.result
+        if not module_code:
+            return
+
+        # Step 2: 組裝 TCode 清單
+        info = SAP_MODULES.get(module_code, {})
+        module_name = info.get("name", module_code)
+        lib = self.worker.skill_library
+
+        # suggested_skills 為唯一來源，以 skill 檔是否存在判斷 ✓
+        import os as _os
+        _skills_dir = (lib.skill_dirs[0][1] if lib else "") or ""
+
+        def _has_skill(tcode: str) -> bool:
+            if not _skills_dir:
+                return False
+            return _os.path.exists(_os.path.join(_skills_dir, f"{tcode}.md"))
+
+        tcode_rows = [
+            (tcode, name, _has_skill(tcode))
+            for name, tcode, _desc in info.get("suggested_skills", [])
+        ]
+
+        skill_dlg = SkillSelectDialog(
+            self.root,
+            module_code=module_code,
+            module_name=module_name,
+            tcode_rows=tcode_rows,
         )
-        if arg:
-            self.worker.submit("macro", arg=arg.strip())
+        if skill_dlg.result:
+            self.worker.submit("study", goal=skill_dlg.result)
 
     def _connect_dialog(self):
         current = normalize_provider_name(os.getenv("LLM_PROVIDER", "github_copilot"))
         dialog = tk.Toplevel(self.root)
         dialog.title("Connect")
+        dialog.configure(bg=THEME["bg"])
         dialog.transient(self.root)
         dialog.grab_set()
         dialog.resizable(False, False)
@@ -1371,7 +1787,7 @@ class SAPCopilotUI:
         key_var = tk.StringVar()
         status_var = tk.StringVar()
 
-        outer = ttk.Frame(dialog, padding=12)
+        outer = ttk.Frame(dialog, padding=14, style="TFrame")
         outer.pack(fill=tk.BOTH, expand=True)
 
         provider_box = ttk.LabelFrame(outer, text="LLM Provider")
@@ -1391,7 +1807,18 @@ class SAPCopilotUI:
 
         method_box = ttk.LabelFrame(outer, text="連線方法")
         method_box.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
-        method_text = tk.Text(method_box, width=72, height=8, wrap=tk.WORD)
+        method_text = tk.Text(
+            method_box,
+            width=72,
+            height=8,
+            wrap=tk.WORD,
+            bg=THEME["output_bg"],
+            fg=THEME["text"],
+            insertbackground=THEME["accent"],
+            relief=tk.FLAT,
+            padx=8,
+            pady=8,
+        )
         method_text.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
         method_text.configure(state=tk.DISABLED)
 
@@ -1409,7 +1836,7 @@ class SAPCopilotUI:
         key_entry = ttk.Entry(form, textvariable=key_var, width=46, show="*")
         key_entry.grid(row=2, column=1, sticky=tk.W, padx=(8, 0), pady=2)
 
-        ttk.Label(outer, textvariable=status_var, foreground="#666").pack(fill=tk.X, pady=(8, 0))
+        ttk.Label(outer, textvariable=status_var, style="Subtle.TLabel").pack(fill=tk.X, pady=(8, 0))
 
         def _write_method(text):
             method_text.configure(state=tk.NORMAL)
@@ -1468,8 +1895,8 @@ class SAPCopilotUI:
             self.worker.submit("connect", provider=provider)
             dialog.destroy()
 
-        ttk.Button(buttons, text="Connect", command=_connect_selected).pack(side=tk.RIGHT)
-        ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT, padx=(0, 8))
+        ttk.Button(buttons, text="Connect", command=_connect_selected, style="Accent.TButton").pack(side=tk.RIGHT)
+        ttk.Button(buttons, text="Cancel", command=dialog.destroy, style="Warm.TButton").pack(side=tk.RIGHT, padx=(0, 8))
 
         dialog.bind("<Return>", lambda _event: _connect_selected())
         dialog.bind("<Escape>", lambda _event: dialog.destroy())
@@ -1482,69 +1909,22 @@ class SAPCopilotUI:
         self.input_text.delete("1.0", tk.END)
         self.worker.submit("send", text=text)
 
-    def _configure_output_tags(self):
-        self.output.tag_configure("time", foreground="#b7a891", font=("Segoe UI", 8))
-        self.output.tag_configure("user_label", foreground=UI_COLORS["user"], font=("Segoe UI", 10, "bold"))
-        self.output.tag_configure("ai_label", foreground=UI_COLORS["ai"], font=("Segoe UI", 10, "bold"))
-        self.output.tag_configure("system_label", foreground=UI_COLORS["system"], font=("Segoe UI", 9, "bold"))
-        self.output.tag_configure("body", foreground=UI_COLORS["text"], font=("Segoe UI", 10), lmargin1=12, lmargin2=12, rmargin=14)
-        self.output.tag_configure("user_body", foreground="#0d47a1", font=("Segoe UI", 10, "bold"), lmargin1=12, lmargin2=12, rmargin=14)
-        self.output.tag_configure(
-            "system_body",
-            foreground=UI_COLORS["system"],
-            font=("Segoe UI", 9),
-            lmargin1=12,
-            lmargin2=12,
-            rmargin=14,
-            spacing3=5,
-        )
-        self.output.tag_configure(
-            "ai_body",
-            foreground=UI_COLORS["text"],
-            font=("Segoe UI", 10),
-            lmargin1=12,
-            lmargin2=12,
-            rmargin=14,
-            spacing3=6,
-        )
-
-    @staticmethod
-    def _classify_log_entry(text):
-        stripped = str(text or "").strip()
-        if stripped.startswith("You:"):
-            return "user", stripped[4:].strip()
-        if stripped.startswith("AI:\n"):
-            return "ai", stripped[3:].lstrip()
-        if stripped.startswith("AI:"):
-            return "ai", stripped[3:].strip()
-        if SAPCopilotWorker._is_ui_status_log(stripped):
-            return "system", stripped
-        return "terminal", stripped
-
     def _append(self, text):
         timestamp = time.strftime("%H:%M:%S")
-        role, body = self._classify_log_entry(text)
-        if role not in {"user", "ai", "system"}:
-            self._print_terminal_log(text)
-            return
         self.output.configure(state=tk.NORMAL)
-        self.output.insert(tk.END, f"[{timestamp}] ", ("time",))
-        if role == "user":
-            self.output.insert(tk.END, "You: ", ("user_label",))
-            self.output.insert(tk.END, (body or "").rstrip() + "\n\n", ("user_body",))
-        elif role == "system":
-            self.output.insert(tk.END, "System: ", ("system_label",))
-            self.output.insert(tk.END, (body or "").rstrip() + "\n\n", ("system_body",))
+        self.output.insert(tk.END, f"[{timestamp}] ", "timestamp")
+        line = text.rstrip()
+        if line.startswith("You:"):
+            self.output.insert(tk.END, "You:", "you")
+            self.output.insert(tk.END, line[4:])
+        elif line.startswith("AI:"):
+            self.output.insert(tk.END, "AI:", "ai")
+            self.output.insert(tk.END, line[3:])
         else:
-            self.output.insert(tk.END, "AI:\n", ("ai_label",))
-            self.output.insert(tk.END, (body or "(AI 未回傳任何訊息)").rstrip() + "\n\n", ("ai_body",))
+            self.output.insert(tk.END, line)
+        self.output.insert(tk.END, "\n\n")
         self.output.see(tk.END)
         self.output.configure(state=tk.DISABLED)
-
-    @staticmethod
-    def _print_terminal_log(text):
-        timestamp = time.strftime("%H:%M:%S")
-        print(f"[{timestamp}] {str(text or '').rstrip()}", flush=True)
 
     def _poll_worker(self):
         while True:
@@ -1554,12 +1934,8 @@ class SAPCopilotUI:
                 break
             kind = item.get("kind")
             payload = item.get("payload")
-            if kind == "dialog_log":
+            if kind == "log":
                 self._append(str(payload))
-            elif kind == "terminal_log":
-                self._print_terminal_log(payload)
-            elif kind == "log":
-                self._print_terminal_log(payload)
             elif kind == "state":
                 self._apply_state(payload or {})
             elif kind == "prompt":
@@ -1573,6 +1949,15 @@ class SAPCopilotUI:
         message = payload.get("message") or ""
         if prompt_type == "confirm":
             response = messagebox.askyesno(title, message, parent=self.root)
+        elif prompt_type == "study_step":
+            dlg = StudyStepDialog(
+                self.root,
+                step_title=payload.get("step_title") or title,
+                body=payload.get("body") or message,
+                current_value=payload.get("current_value") or "",
+                warn=payload.get("warn") or "",
+            )
+            response = dlg.result
         else:
             response = simpledialog.askstring(
                 title,
@@ -1591,10 +1976,10 @@ class SAPCopilotUI:
         tcode = state.get("tcode") or "-"
         user = state.get("user") or "-"
         client = state.get("client") or "-"
-        status_mark = "✓" if state.get("ready") else "!"
-        self.sap_var.set(f"{status_mark} {ready}  {tcode}  {client}/{user}")
+        status_icon = "✓" if state.get("ready") else "○"
+        self.sap_var.set(f"{status_icon} {tcode}   {client} / {user}" if state.get("ready") else f"{status_icon} {ready}")
         provider = provider_display_name(state.get("provider") or "github_copilot")
-        self.model_var.set(f"{provider} / {state.get('model') or '-'}")
+        self.model_var.set(state.get("model") or provider or "-")
         recording = state.get("recording") or ""
         self.recording_var.set(f"REC: {recording}" if recording else "")
 

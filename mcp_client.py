@@ -128,10 +128,22 @@ class MCPSAPClient:
         self.env = env
 
         if self.server_dir:
-            self.command = command or os.getenv("MCP_SAP_LOCAL_COMMAND", "uv")
+            # On Windows, uv's Python-query subprocess does not inherit
+            # PYTHONUTF8, so non-ASCII venv paths (e.g. CJK usernames) cause
+            # site.py to crash with a cp950 decode error before the server
+            # ever starts.  Bypass uv entirely by calling the venv Python
+            # directly; -X utf8 is processed before site.py, so it always works.
+            _default_command = "uv"
+            _default_args = "run python -m mcp_sap_gui.server"
+            if os.name == "nt" and not os.getenv("MCP_SAP_LOCAL_COMMAND"):
+                _venv_python = Path(self.server_dir) / ".venv" / "Scripts" / "python.exe"
+                if _venv_python.exists():
+                    _default_command = str(_venv_python)
+                    _default_args = "-X utf8 -m mcp_sap_gui.server"
+            self.command = command or os.getenv("MCP_SAP_LOCAL_COMMAND", _default_command)
             self.args = args if args is not None else _env_args(
                 "MCP_SAP_LOCAL_ARGS",
-                "run python -m mcp_sap_gui.server",
+                _default_args,
             )
             self.cwd = cwd or os.getenv("MCP_SAP_CWD") or self.server_dir
         elif self.allow_package_mode:
@@ -179,8 +191,52 @@ class MCPSAPClient:
             "stderr_tail": self.stderr_tail,
         }
 
+    def _fix_venv_pth_files(self) -> None:
+        """Convert absolute non-ASCII paths in .pth files to relative ASCII paths.
+
+        uv writes editable-install .pth files in UTF-8 with absolute paths.
+        On Windows systems where the username contains CJK characters, Python's
+        site.py reads these files with the ANSI code page (e.g. cp950) and
+        crashes.  Replacing the absolute path with a relative ASCII-only path
+        avoids all encoding issues — Python resolves it internally using Unicode.
+        """
+        if not self.server_dir:
+            return
+        site_packages = Path(self.server_dir) / ".venv" / "Lib" / "site-packages"
+        if not site_packages.exists():
+            return
+        for pth in site_packages.glob("*.pth"):
+            try:
+                raw = pth.read_bytes()
+                text = raw.decode("utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            if not any(ord(ch) > 127 for ch in text):
+                continue  # Already ASCII-safe; nothing to do.
+            lines = text.splitlines(keepends=True)
+            new_lines = []
+            changed = False
+            for line in lines:
+                stripped = line.rstrip("\r\n")
+                if stripped.startswith(("#", "import ")) or not stripped:
+                    new_lines.append(line)
+                    continue
+                try:
+                    abs_path = Path(stripped)
+                    rel = os.path.relpath(abs_path, site_packages)
+                    # Use forward slashes so the result is ASCII-clean.
+                    ascii_rel = rel.replace("\\", "/")
+                    ascii_rel.encode("ascii")  # Verify it's pure ASCII.
+                    new_lines.append(ascii_rel + "\n")
+                    changed = True
+                except (ValueError, UnicodeEncodeError, OSError):
+                    new_lines.append(line)
+            if changed:
+                pth.write_bytes("".join(new_lines).encode("ascii"))
+
     def check_available(self) -> None:
         """Validate local MCP prerequisites before launching the server."""
+        self._fix_venv_pth_files()
         if not self.enabled:
             raise MCPClientUnavailable("MCP SAP client is disabled by MCP_SAP_ENABLED=false")
         if MCP_IMPORT_ERROR is not None:
@@ -210,6 +266,10 @@ class MCPSAPClient:
             except OSError:
                 # The server launch will surface the real error in stderr.
                 pass
+        # Force UTF-8 mode so Python can read .pth files with non-ASCII paths
+        # (e.g. Windows systems where the username contains CJK characters).
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
         return env
 
     async def connect(self) -> "MCPSAPClient":

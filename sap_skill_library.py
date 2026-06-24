@@ -17,6 +17,84 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 SKILLS_DIR = os.path.join(ROOT_DIR, "skills")
 SKILL_INDEX_FILENAME = "_skill_index.json"
 
+SAP_MODULES = {
+    "MM": {
+        "name": "物料管理",
+        "description": "採購、庫存、物料主檔管理",
+        "tcodes": {"ME51N", "ME5A", "ME21N", "ME2L", "ME2M", "ME2N", "MIGO", "MMBE", "MB51", "MM01"},
+        "keywords": {"物料", "採購", "庫存", "料號", "material", "purchase", "stock", "inventory"},
+        "suggested_skills": [
+            ("請購單建立",          "ME51N", "建立採購申請請購單"),
+            ("請購單列表",          "ME5A",  "查詢請購單清單報表"),
+            ("採購單建立",          "ME21N", "建立標準採購訂單"),
+            ("採購單查詢（依供應商）", "ME2L",  "依供應商查詢採購訂單清單"),
+            ("採購單查詢（依物料）",  "ME2M",  "依物料查詢採購訂單清單"),
+            ("採購單查詢（依採購文件）","ME2N", "查詢採購訂單清單"),
+            ("採購單收貨",          "MIGO",  "執行貨物收貨過帳"),
+            ("庫存數量查詢",        "MMBE",  "查詢物料各工廠庫存概況"),
+            ("物料異動文件查詢",    "MB51",  "查詢物料異動記錄"),
+            ("物料主檔",           "MM01",  "建立／查詢物料主檔"),
+        ],
+    },
+    "SD": {
+        "name": "銷售配銷",
+        "description": "銷售訂單、交貨、請款與客戶管理",
+        "tcodes": {"VA01", "VA02", "VA05", "VL01N", "VL02N", "VL06F", "VF01", "VF05", "VF03"},
+        "keywords": {"銷售", "訂單", "交貨", "發票", "客戶", "sales", "delivery", "billing", "invoice"},
+        "suggested_skills": [
+            ("銷售訂單建立",              "VA01",  "建立標準銷售訂單"),
+            ("銷售訂單更改",              "VA02",  "修改已建立的銷售訂單"),
+            ("銷售文件清單",              "VA05",  "依條件查詢銷售訂單清單"),
+            ("出貨單建立",               "VL01N", "依銷售訂單建立出貨單"),
+            ("出貨單變更／發貨過帳",       "VL02N", "修改出貨單並執行發貨過帳"),
+            ("出貨單清單",               "VL06F", "查詢出貨單清單"),
+            ("請款文件建立",              "VF01",  "依交貨單建立請款發票"),
+            ("請款文件清單",              "VF05",  "查詢請款文件清單"),
+            ("請款文件會計文件查詢",       "VF03",  "查詢請款文件及對應 FI 憑證"),
+        ],
+    },
+    "FI": {
+        "name": "財務會計",
+        "description": "總帳、應收應付帳款、憑證過帳",
+        "tcodes": {"FBL5N", "F-28", "MIRO", "MIR6", "FBL1N", "F-53"},
+        "keywords": {"財務", "會計", "憑證", "應付", "應收", "過帳", "帳款", "finance", "accounting"},
+        "suggested_skills": [
+            ("客戶明細查詢",       "FBL5N", "查詢客戶應收帳款明細"),
+            ("應收帳款結清",       "F-28",  "執行客戶應收帳款沖銷結清"),
+            ("發票驗證",          "MIRO",  "輸入供應商發票產生應付帳款"),
+            ("發票文件查詢",       "MIR6",  "查詢採購發票驗證文件清單"),
+            ("應付帳款查詢",       "FBL1N", "查詢供應商應付帳款明細"),
+            ("應付帳款結清",       "F-53",  "執行供應商應付帳款付款結清"),
+        ],
+    },
+    "CO": {
+        "name": "管理會計",
+        "description": "成本中心、利潤中心、內部訂單管理",
+        "tcodes": {"KS01", "KS03", "KSB1", "KE5Z", "KO01", "KO03"},
+        "keywords": {"成本", "利潤", "管理會計", "cost", "profit", "controlling"},
+        "suggested_skills": [
+            ("成本中心查詢", "KS03", "查詢成本中心主檔資料"),
+            ("成本中心實際值報表", "KSB1", "查詢成本中心實際成本明細"),
+            ("利潤中心報表", "KE5Z", "查詢利潤中心損益"),
+            ("內部訂單查詢", "KO03", "查詢內部訂單主檔"),
+        ],
+    },
+    "PP": {
+        "name": "生產規劃",
+        "description": "生產訂單、物料需求規劃、BOM 管理",
+        "tcodes": {"CO01", "CO02", "CO03", "CS01", "CS03", "MD01", "MD04", "CA03"},
+        "keywords": {"生產", "製造", "工單", "bom", "mrp", "production", "manufacturing", "planning"},
+        "suggested_skills": [
+            ("生產訂單建立", "CO01", "建立生產製造訂單"),
+            ("生產訂單查詢", "CO03", "查詢生產訂單明細"),
+            ("BOM查詢", "CS03", "查詢物料清單結構"),
+            ("MRP執行", "MD01", "執行物料需求規劃"),
+            ("物料需求查詢", "MD04", "查詢物料需求與供給"),
+            ("工藝路線查詢", "CA03", "查詢生產工藝路線"),
+        ],
+    },
+}
+
 
 class SAPSkillLibrary:
     """Read SOP skills from curated skill files and recorded SOP files."""
@@ -540,3 +618,93 @@ class SAPSkillLibrary:
                 lines[idx] = f"# SOP: {canonical_name}"
                 return "\n".join(lines)
         return f"# SOP: {canonical_name}\n\n{content}"
+
+    # ===== SAP 模組課程 =====
+
+    @classmethod
+    def get_module(cls, code: str) -> dict:
+        """Return module info dict for a given module code (e.g. 'MM'), or None."""
+        return SAP_MODULES.get(str(code or "").upper())
+
+    @classmethod
+    def is_module_code(cls, text: str) -> bool:
+        return str(text or "").upper() in SAP_MODULES
+
+    @classmethod
+    def parse_module_prefix(cls, text: str):
+        """Extract optional SAP module code prefix from a study argument.
+
+        Returns (module_code, remainder).  module_code is None if not detected.
+        Examples:
+          "MM"            → ("MM", "")
+          "MM 物料查詢"   → ("MM", "物料查詢")
+          "依公司代碼查詢" → (None, "依公司代碼查詢")
+        """
+        tokens = str(text or "").strip().split(maxsplit=1)
+        if not tokens:
+            return None, text
+        if cls.is_module_code(tokens[0]):
+            return tokens[0].upper(), tokens[1].strip() if len(tokens) > 1 else ""
+        return None, text
+
+    def list_skills_by_module(self, module_code: str) -> list:
+        """Return existing skills that belong to the given SAP module."""
+        module = self.get_module(module_code)
+        if not module:
+            return []
+        tcodes = {t.lower() for t in module["tcodes"]}
+        keywords = {k.lower() for k in module["keywords"]}
+        matched = []
+        for skill in self.list_skills():
+            haystack = self._normalize_semantic_text(
+                f"{skill['name']} {skill.get('summary', '')}"
+            )
+            if any(t in haystack for t in tcodes) or any(k in haystack for k in keywords):
+                matched.append(skill)
+        return matched
+
+    @classmethod
+    def format_module_list(cls) -> str:
+        """Return a plain-text overview of all SAP modules."""
+        lines = ["📘 SAP 五大模組課程", ""]
+        for code, info in SAP_MODULES.items():
+            lines.append(f"  {code}  {info['name']:<8}  {info['description']}")
+        lines += ["", "輸入 /study [模組代碼] 查看課程，例如 /study MM"]
+        return "\n".join(lines)
+
+    def format_module_curriculum(self, module_code: str) -> str:
+        """Return a plain-text curriculum for one SAP module."""
+        module = SAP_MODULES.get(module_code)
+        if not module:
+            return f"未知模組代碼：{module_code}"
+
+        lines = [
+            f"📘 {module_code} — {module['name']}",
+            f"  {module['description']}",
+            "",
+        ]
+
+        existing = self.list_skills_by_module(module_code)
+        existing_keys = {self._lookup_key(s["name"]) for s in existing}
+
+        if existing:
+            lines.append("[已有 Skill - 可直接啟動教練]")
+            for skill in existing:
+                lines.append(f"  - {skill['name']}")
+                lines.append(f"    /study {module_code} {skill['name']}")
+            lines.append("")
+
+        missing = [
+            (name, tcode, desc)
+            for name, tcode, desc in module["suggested_skills"]
+            if self._lookup_key(name) not in existing_keys
+        ]
+        if missing:
+            lines.append("[建議課程 - 尚未錄製]")
+            for name, tcode, desc in missing:
+                lines.append(f"  - {name} ({tcode})  {desc}")
+                lines.append(f"    /record {name}   或   /study --draft {name}")
+            lines.append("")
+
+        lines.append(f"輸入 /study {module_code} [課程名稱] 啟動教練引導")
+        return "\n".join(lines)

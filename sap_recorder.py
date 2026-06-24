@@ -160,23 +160,28 @@ class SAPRecorder:
         if not self._is_recording or not self._current_recording:
             return
 
+        event_type = event.get("event_type", "UNKNOWN")
+        details = event.get("details", {})
+
+        # 只儲存使用者操作，跳過系統產生的預設值與雜訊
+        if event_type in NOISY_EVENT_TYPES:
+            return
+        if details.get("system_default", False):
+            return
+
         self._current_recording["raw_events"].append(event)
 
         # 即時在 CLI 顯示偵測到的事件
-        event_type = event.get("event_type", "UNKNOWN")
         label = EVENT_TYPE_LABELS.get(event_type, f"❓ {event_type}")
-        details = event.get("details", {})
 
         if event_type == "TCODE_CHANGE":
             detail_str = f"{details.get('from_tcode', '?')} → {details.get('to_tcode', '?')}"
         elif event_type == "SCREEN_CHANGE":
             detail_str = f"畫面 {details.get('from_screen', '?')} → {details.get('to_screen', '?')}"
-        elif event_type in ("FIELD_CHANGE", "FIELD_DEFAULT"):
+        elif event_type == "FIELD_CHANGE":
             elem_id = details.get("element_id", "?")
-            # 只顯示最後一段 ID（更簡潔）
             short_id = elem_id.split("/")[-1] if "/" in elem_id else elem_id
-            prefix = "預設 " if event_type == "FIELD_DEFAULT" else ""
-            detail_str = f"{prefix}{short_id} = \"{details.get('to_value', '')}\""
+            detail_str = f"{short_id} = \"{details.get('to_value', '')}\""
         elif event_type in ("ACTIVE_WINDOW_CHANGE", "WINDOW_OPEN", "WINDOW_CLOSE"):
             detail_str = f"{details.get('window_id', details.get('to_window', '?'))} {details.get('title', '')}"
         elif event_type == "FOCUS_CHANGE":
@@ -297,7 +302,15 @@ class SAPRecorder:
                 step = f"畫面跳轉: {details.get('from_screen', '?')} → {details.get('to_screen', '?')} ({details.get('title', '')})"
             elif event_type == "FIELD_CHANGE":
                 elem_id = details.get("element_id", "?")
-                short_id = elem_id.split("/")[-1] if "/" in elem_id else elem_id
+                if "#r" in elem_id:
+                    parts = elem_id.rsplit("#r", 1)
+                    grid_short = parts[0].split("/")[-1]
+                    row_col = parts[1].split("#", 1)
+                    row_num = int(row_col[0]) + 1
+                    col_name = row_col[1] if len(row_col) > 1 else "?"
+                    short_id = f"{grid_short} 第{row_num}行/{col_name}"
+                else:
+                    short_id = elem_id.split("/")[-1] if "/" in elem_id else elem_id
                 step = f"填入欄位: {short_id} = \"{details.get('to_value', '')}\""
             elif event_type == "FIELD_DEFAULT":
                 elem_id = details.get("element_id", "?")
@@ -321,6 +334,19 @@ class SAPRecorder:
             lines.append(f"{i}. {step}")
 
         return "\n".join(lines)
+
+    def save_recording(self, recording: dict) -> str:
+        """
+        將外部已建好的 recording dict（如 VBS 解析結果）直接儲存到 recordings/ 目錄。
+
+        Returns:
+            str: 儲存的檔案路徑
+        """
+        name = recording.get("name", "import")
+        filepath = self._get_filepath(name)
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(recording, f, ensure_ascii=False, indent=2)
+        return filepath
 
     def _get_filepath(self, name: str) -> str:
         """產生錄製檔案的完整路徑"""
@@ -429,10 +455,38 @@ class SAPRecorder:
         Returns:
             str: 儲存的 .md 檔案路徑，失敗時回傳空字串
         """
-        events_json = json.dumps(events, ensure_ascii=False, indent=2)
+        # Use compact JSON to minimise token usage
+        events_json = json.dumps(events, ensure_ascii=False)
+
+        # Truncate events list if the JSON is still too large (~4 chars per token,
+        # target ≤ 80 k tokens for events to leave headroom for prompt + screen context)
+        MAX_EVENTS_CHARS = 320_000
+        truncated = False
+        if len(events_json) > MAX_EVENTS_CHARS:
+            truncated_events: list = []
+            total = 0
+            for ev in events:
+                s = json.dumps(ev, ensure_ascii=False)
+                if total + len(s) > MAX_EVENTS_CHARS:
+                    break
+                truncated_events.append(ev)
+                total += len(s)
+            events_json = json.dumps(truncated_events, ensure_ascii=False)
+            truncated = True
+
+        truncation_note = (
+            "\n\n> ⚠️ 注意：錄製事件數量過多，已自動截斷，僅包含前段事件。"
+            if truncated else ""
+        )
+
         screen_context = ""
         if screen_state:
-            screen_context = f"\n\n## 停止錄製時的畫面狀態\n```json\n{json.dumps(screen_state, ensure_ascii=False, indent=2)}\n```"
+            screen_json = json.dumps(screen_state, ensure_ascii=False, indent=2)
+            # Cap screen state to ~5 k tokens worth of characters
+            MAX_SCREEN_CHARS = 20_000
+            if len(screen_json) > MAX_SCREEN_CHARS:
+                screen_json = screen_json[:MAX_SCREEN_CHARS] + "\n... (截斷，僅顯示前部分)"
+            screen_context = f"\n\n## 停止錄製時的畫面狀態\n```json\n{screen_json}\n```"
 
         prompt = f"""請將以下 SAP GUI 操作錄製事件整理成一份清晰的自然語言操作指南（SOP）。
 
@@ -443,7 +497,7 @@ class SAPRecorder:
 ```json
 {events_json}
 ```
-{screen_context}
+{truncation_note}{screen_context}
 
 ## 要求
 1. 用繁體中文撰寫
@@ -454,7 +508,8 @@ class SAPRecorder:
 6. 如果有 T-Code，明確說明要進入哪個交易
 7. 如果事件類型是 FIELD_DEFAULT 或 details.system_default=true，代表畫面跳轉後 SAP 自動帶出的預設值，不是使用者手動輸入；不要寫成「請輸入」，最多描述為「確認系統已預設」或直接略過
 8. 如果欄位在畫面上已有可接受的目前值，Study Mode 應引導使用者確認沿用，而不是要求重新輸入錄製值
-9. 直接輸出 Markdown 格式的 SOP，不要加額外的包裝或說明
+9. element_id 格式為 `{{grid_id}}#r{{row}}#{{col}}` 的是 ALV Grid 的 cell，row 從 0 起算；描述時說明「第 N 行（列）的 XXX 欄位」，N = row+1
+10. 直接輸出 Markdown 格式的 SOP，不要加額外的包裝或說明
 
 ## 輸出格式範例
 # SOP: [名稱]
