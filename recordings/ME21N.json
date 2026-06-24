@@ -1,0 +1,889 @@
+{
+  "name": "ME21N",
+  "created_at": "2026-06-24T00:00:25.523563",
+  "duration_seconds": 76.4,
+  "event_count": 7,
+  "raw_event_count": 62,
+  "raw_events": [
+    {
+      "timestamp": "2026-06-24T00:00:44.486602",
+      "event_type": "TCODE_CHANGE",
+      "details": {
+        "from_tcode": "",
+        "to_tcode": "ME21N",
+        "screen_number": "14",
+        "title": "SAPGUI.GOSCONTAINERCTRL.1"
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:44.486602",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/shell[0]",
+        "from_value": "",
+        "to_value": "SAPGUI.GOSCONTAINERCTRL.1",
+        "tcode": "ME21N",
+        "screen_number": "14",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:44.486602",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/titl/shellcont/shell",
+        "from_value": "",
+        "to_value": "SAP.Toolbar.1",
+        "tcode": "ME21N",
+        "screen_number": "14",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "SCREEN_CHANGE",
+      "details": {
+        "tcode": "ME21N",
+        "from_screen": "14",
+        "to_screen": "1000",
+        "title": "一般選擇"
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/box%B003034_BLOCK_1000",
+        "from_value": "",
+        "to_value": "一般選擇",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_P_QCOUNT_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "最大的符合項目數      ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txtP_QCOUNT",
+        "from_value": "",
+        "to_value": "5000",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/chkP_QERLBA",
+        "from_value": "",
+        "to_value": "僅未結",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/chkP_QFREIG",
+        "from_value": "",
+        "to_value": "僅已核發",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/chkP_QOPREL",
+        "from_value": "",
+        "to_value": "未結或已核發",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/chkP_QZUGBA",
+        "from_value": "",
+        "to_value": "指派、開啟以及核發",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/box%BF58046_BLOCK_1000",
+        "from_value": "",
+        "to_value": "程式選擇",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00045_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "申請人名稱               ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00045_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00044_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "請購單〈請求〉日期   ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00044_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00026_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "請購單號碼               ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtSP$00026-LOW",
+        "from_value": "",
+        "to_value": "10002231",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00026_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00027_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "需求追蹤號碼            ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00027_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00028_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "項目號碼                  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00028_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00029_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "文件類型                  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00029_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00031_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "採購群組                  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00031_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00040_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "採購組織                  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00040_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00032_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "MPN 物料                    ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00032_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00046_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "處理器名稱               ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00046_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00039_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "固定供應商               ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00039_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00037_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "科目指派種類            ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00037_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00041_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "草案協議號碼            ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00041_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00042_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "草案協議項目            ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00042_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00043_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "期望的供應商            ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00043_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00033_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "物料群組",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00033_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至 ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00034_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "物料",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00034_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至 ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00038_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "項目種類",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00038_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至 ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00035_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "供應工廠",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00035_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至 ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00036_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "工廠",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_SP$00036_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至 ",
+        "tcode": "ME21N",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:58.909365",
+      "event_type": "SCREEN_CHANGE",
+      "details": {
+        "tcode": "ME21N",
+        "from_screen": "1000",
+        "to_screen": "14",
+        "title": "SAPGUI.GOSCONTAINERCTRL.1"
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:58.909365",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/shell[0]",
+        "from_value": "",
+        "to_value": "SAPGUI.GOSCONTAINERCTRL.1",
+        "tcode": "ME21N",
+        "screen_number": "14",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:58.909365",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/titl/shellcont/shell",
+        "from_value": "",
+        "to_value": "SAP.Toolbar.1",
+        "tcode": "ME21N",
+        "screen_number": "14",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:01:06.646892",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/shell[0]",
+        "from_value": "",
+        "to_value": "SAPGUI.GOSCONTAINERCTRL.1",
+        "tcode": "",
+        "screen_number": "",
+        "system_default": false
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:01:06.646892",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/titl/shellcont/shell",
+        "from_value": "",
+        "to_value": "SAP.Toolbar.1",
+        "tcode": "",
+        "screen_number": "",
+        "system_default": false
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:01:07.896708",
+      "event_type": "TCODE_CHANGE",
+      "details": {
+        "from_tcode": "",
+        "to_tcode": "ME21N",
+        "screen_number": "14",
+        "title": "SAPGUI.GOSCONTAINERCTRL.1"
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:01:38.938026",
+      "event_type": "TCODE_CHANGE",
+      "details": {
+        "from_tcode": "",
+        "to_tcode": "ME21N",
+        "screen_number": "14",
+        "title": "SAPGUI.GOSCONTAINERCTRL.1"
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:01:38.938026",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/shell[0]",
+        "from_value": "",
+        "to_value": "SAPGUI.GOSCONTAINERCTRL.1",
+        "tcode": "ME21N",
+        "screen_number": "14",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:01:38.938026",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/titl/shellcont/shell",
+        "from_value": "",
+        "to_value": "SAP.Toolbar.1",
+        "tcode": "ME21N",
+        "screen_number": "14",
+        "system_default": true
+      },
+      "source": "mcp"
+    }
+  ],
+  "events": [
+    {
+      "timestamp": "2026-06-24T00:00:44.486602",
+      "event_type": "TCODE_CHANGE",
+      "details": {
+        "from_tcode": "",
+        "to_tcode": "ME21N",
+        "screen_number": "14",
+        "title": "SAPGUI.GOSCONTAINERCTRL.1"
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:55.551455",
+      "event_type": "SCREEN_CHANGE",
+      "details": {
+        "tcode": "ME21N",
+        "from_screen": "14",
+        "to_screen": "1000",
+        "title": "一般選擇"
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:00:58.909365",
+      "event_type": "SCREEN_CHANGE",
+      "details": {
+        "tcode": "ME21N",
+        "from_screen": "1000",
+        "to_screen": "14",
+        "title": "SAPGUI.GOSCONTAINERCTRL.1"
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:01:06.646892",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/shell[0]",
+        "from_value": "",
+        "to_value": "SAPGUI.GOSCONTAINERCTRL.1",
+        "tcode": "",
+        "screen_number": "",
+        "system_default": false
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:01:06.646892",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/titl/shellcont/shell",
+        "from_value": "",
+        "to_value": "SAP.Toolbar.1",
+        "tcode": "",
+        "screen_number": "",
+        "system_default": false
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:01:07.896708",
+      "event_type": "TCODE_CHANGE",
+      "details": {
+        "from_tcode": "",
+        "to_tcode": "ME21N",
+        "screen_number": "14",
+        "title": "SAPGUI.GOSCONTAINERCTRL.1"
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T00:01:38.938026",
+      "event_type": "TCODE_CHANGE",
+      "details": {
+        "from_tcode": "",
+        "to_tcode": "ME21N",
+        "screen_number": "14",
+        "title": "SAPGUI.GOSCONTAINERCTRL.1"
+      },
+      "source": "mcp"
+    }
+  ],
+  "summary": "涉及交易: ME21N，修改了 2 個欄位，偵測到 2 個畫面/視窗變化，共 7 個操作步驟"
+}

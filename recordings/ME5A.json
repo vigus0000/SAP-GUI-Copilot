@@ -1,0 +1,953 @@
+{
+  "name": "ME5A",
+  "created_at": "2026-06-23T23:58:43.392463",
+  "duration_seconds": 44.0,
+  "event_count": 4,
+  "raw_event_count": 69,
+  "raw_events": [
+    {
+      "timestamp": "2026-06-23T23:58:58.269269",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtBA_BANFN-LOW",
+        "from_value": "",
+        "to_value": " 001000223",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": false
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:00.959314",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtBA_BANFN-LOW",
+        "from_value": " 001000223",
+        "to_value": "001000223",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": false
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "TCODE_CHANGE",
+      "details": {
+        "from_tcode": "",
+        "to_tcode": "ME5A",
+        "screen_number": "1000",
+        "title": "請購單                     "
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_BA_BANFN_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "請購單                     ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_BA_BANFN_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_BA_EKGRP_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "採購群組                  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_BA_EKGRP_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_BA_MATNR_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "物料                        ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_BA_MATNR_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_BA_MATKL_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "物料群組                  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_BA_MATKL_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_BA_BEDNR_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "需求追蹤號碼            ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_BA_BEDNR_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_WERKS_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "工廠                        ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_WERKS_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_BSART_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "文件類型                  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_BSART_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_PSTYP_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "項目種類                  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_PSTYP_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_KNTTP_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "科目指派種類            ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_KNTTP_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_LFDAT_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "交貨日期                  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_LFDAT_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_FRGDT_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "核發日期                  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_FRGDT_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_DISPO_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "物料計劃員/控制員     ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_DISPO_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_STATU_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "處理狀態                  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_STATU_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_FLIEF_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "固定供應商               ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_FLIEF_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_BANPR_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "請購單處理狀態         ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_BANPR_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_BLCKD_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "凍結指示碼               ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_BLCKD_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至  ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_P_AFNAM_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "申請人                     ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_P_TXZ01_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "短文                        ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_P_SRTKZ_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "排序指示碼               ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtP_SRTKZ",
+        "from_value": "",
+        "to_value": "1",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/chkP_ZUGBA",
+        "from_value": "",
+        "to_value": "指派的請購單",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/chkP_MEMORY",
+        "from_value": "",
+        "to_value": "亦列出暫存的請購單",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/chkP_ERLBA",
+        "from_value": "",
+        "to_value": "結案的請購單",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/chkP_BSTBA",
+        "from_value": "",
+        "to_value": "\"分批訂購\" 之請購",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/chkP_FREIG",
+        "from_value": "",
+        "to_value": "僅核發的請購單",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/chkP_SELGS",
+        "from_value": "",
+        "to_value": "整體核發的請購單",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/chkP_SELPO",
+        "from_value": "",
+        "to_value": "請購〈逐項批准〉",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_KOSTL_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "成本中心",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_KOSTL_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至 ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_PSEXT_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "WBS 元素",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_PSEXT_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至 ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_AUFNR_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "訂單",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_AUFNR_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至 ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_ANLN1_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "資產",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_ANLN1_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至 ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_ANLN2_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "資產子號碼 ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_ANLN2_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至 ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_NPLNR_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "網路",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_NPLNR_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至 ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_VORNR_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "作業號碼",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_VORNR_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至 ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_VBELN_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "銷售訂單",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_VBELN_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至 ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_VBELP_%_APP_%-TEXT",
+        "from_value": "",
+        "to_value": "銷售訂單項目",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/txt%_S_VBELP_%_APP_%-TO_TEXT",
+        "from_value": "",
+        "to_value": "至 ",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:09.303599",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtBA_BANFN-LOW",
+        "from_value": "",
+        "to_value": " 001000223",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": false
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:21.359188",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtBA_BANFN-LOW",
+        "from_value": " 001000223",
+        "to_value": "001000223",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": false
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:22.585011",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtBA_BANFN-LOW",
+        "from_value": "001000223",
+        "to_value": "0010002231",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": false
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:23.789148",
+      "event_type": "SCREEN_CHANGE",
+      "details": {
+        "tcode": "ME5A",
+        "from_screen": "1000",
+        "to_screen": "500",
+        "title": "SAPGUI.CONTAINERCTRL.1"
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:23.789148",
+      "event_type": "FIELD_DEFAULT",
+      "details": {
+        "element_id": "wnd[0]/usr/cntlGRID1/shellcont",
+        "from_value": "",
+        "to_value": "SAPGUI.CONTAINERCTRL.1",
+        "tcode": "ME5A",
+        "screen_number": "500",
+        "system_default": true
+      },
+      "source": "mcp"
+    }
+  ],
+  "events": [
+    {
+      "timestamp": "2026-06-23T23:59:00.959314",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtBA_BANFN-LOW",
+        "from_value": "",
+        "to_value": "001000223",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": false
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:04.214539",
+      "event_type": "TCODE_CHANGE",
+      "details": {
+        "from_tcode": "",
+        "to_tcode": "ME5A",
+        "screen_number": "1000",
+        "title": "請購單                     "
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:22.585011",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtBA_BANFN-LOW",
+        "from_value": "",
+        "to_value": "0010002231",
+        "tcode": "ME5A",
+        "screen_number": "1000",
+        "system_default": false
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-23T23:59:23.789148",
+      "event_type": "SCREEN_CHANGE",
+      "details": {
+        "tcode": "ME5A",
+        "from_screen": "1000",
+        "to_screen": "500",
+        "title": "SAPGUI.CONTAINERCTRL.1"
+      },
+      "source": "mcp"
+    }
+  ],
+  "summary": "涉及交易: ME5A，修改了 2 個欄位，偵測到 1 個畫面/視窗變化，共 4 個操作步驟"
+}
