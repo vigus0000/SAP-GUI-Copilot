@@ -682,12 +682,13 @@ def main():
 
             # --- /quit ---
             if cmd == "/quit":
-                # 確保停止錄製與監控
+                # 確保停止錄製與監控（先停 monitor 防止殘留事件）
+                if monitor and monitor.is_running:
+                    monitor.stop()
+                    monitor = None
                 if recorder.is_recording:
                     print(f"{Colors.YELLOW}  正在停止錄製...{Colors.RESET}")
                     recorder.stop_recording()
-                if monitor and monitor.is_running:
-                    monitor.stop()
                 print(f"\n{Colors.DIM}  👋 再見！{Colors.RESET}\n")
                 break
 
@@ -823,6 +824,7 @@ def main():
                             auth,
                             screen_state=screen_state,
                             provider=agent.provider,
+                            context_events=rec_data.get("context_events", []),
                         )
                         if sop_path:
                             print(f"{Colors.GREEN}  ✅ 自然語言 SOP 已儲存，可用 /study {rec_name} 啟動教練引導{Colors.RESET}")
@@ -1061,11 +1063,11 @@ def main():
             continue
 
         except EOFError:
-            # 確保清理
-            if recorder.is_recording:
-                recorder.stop_recording()
+            # 【方案 C】確保清理：先停 monitor，再停 recorder
             if monitor and monitor.is_running:
                 monitor.stop()
+            if recorder.is_recording:
+                recorder.stop_recording()
             print(f"\n{Colors.DIM}  👋 再見！{Colors.RESET}\n")
             break
 

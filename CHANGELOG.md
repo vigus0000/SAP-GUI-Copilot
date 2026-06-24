@@ -6,12 +6,42 @@
 
 ---
 
+## [0.15.1] - 2026-06-24
+
+#### Added
+- 新增 `sap_monitor.py` Grid cell 補抓：`_read_grid_view_cells()` 與 `_collect_grid_cells()`，可在 MCP monitor 模式下用 COM 補讀 `GuiGridView` 的儲存格內容（上限 `MAX_GRID_ROWS=100`、`MAX_GRID_COLS=30`），解決 VA01 等畫面 KUNNR 等深層欄位在 MCP 模式下遺漏的問題。
+
+#### Changed
+- Record Mode 改為將資料分成 `events`（已驗證的使用者操作）與 `context_events`（畫面跳轉、彈窗、狀態訊息等結果脈絡）；畫面結果不再計入操作步驟，但仍可供 Skill 生成判斷前一步是否完成。
+- Skill 生成前會重新清理錄製事件，僅允許 T-Code、可操作欄位、按鍵、按鈕、頁籤、checkbox/radio/combo 與表格選取等使用者動作形成 SOP；舊版 recordings 載入時也套用相同清理規則。
+- Skill 生成 prompt 分離「已驗證的使用者操作」與「畫面結果/系統脈絡」，禁止把 Label、唯讀輸出、Frame、Container 或 SAP 自動帶值編造成輸入步驟；證據不足時改列為待人工確認。
+- Record Mode 的 COM 補讀改為與 `/scan` 對齊的 12 層 DOM 遍歷，並新增 `GuiTableControl` / `GuiGridView` 可編輯 cell 快照；表格 cell 統一保存 `table_id`、列號、欄位技術名、標題與控制類型，Skill 可生成可讀的表格操作步驟。
+- 新增 `SAP_MONITOR_MAX_FIELDS`（預設 600），控制深層欄位與表格 cell 的單次追蹤上限。
+- Record Mode 新增 SAP GUI Scripting 原生事件路徑：`SAP_NATIVE_RECORD_EVENTS=true` 時啟用 `GuiSession.Record` 與 `Change` event，直接捕捉 Text/Selected/Press/sendVKey 命令；polling 降為畫面脈絡 fallback。
+- 新增 `SAP_RECORD_CONTEXT_POLL_SECONDS`，控制原生錄製期間的畫面跳轉/狀態脈絡掃描頻率。
+- `mcp_client.py` `capture_mcp()` 新增 `session` 參數：MCP monitor 模式下同時用 COM 補讀 `capture_editable_fields()`，MCP 已有的欄位維持優先，COM 只補缺漏欄位，提升 monitor 欄位覆蓋率。
+- `sap_recorder.py` SOP 壓縮邏輯優化：`FIELD_DEFAULT` 事件不再合入 SOP steps（`NOISY_EVENT_TYPES`），`system_default=True` 的事件也一律跳過，避免 SAP 系統預設值污染錄製內容；`FIELD_CHANGE` 與 `FIELD_DEFAULT` 分離處理，前者才顯示 `short_id = "value"` 格式。
+- `sap_recorder.py` Grid row ID 解析改善：`#r` 後綴的 element ID 改以 `rsplit("#r", 1)` 取得列索引，提升 ALV Grid 錄製準確度。
+- `sap_monitor.py` 畫面快照過濾：Tab 標籤元件（`/tabs`、`/tabp`）不再記入 `field_values`，避免 Tab caption 污染欄位差異偵測。
+
+#### Fixed
+- 修正 Record Mode 在 SAP 儲存成功後，將畫面自動清空的客戶、採購單、物料、數量、單位、價格等欄位誤判為使用者清空操作；同批次重置現在聚合為 context-only `SYSTEM_RESET`，並以 `SAVE_ACTION` 記錄已確認的儲存動作。
+- Native recording 讀到標準 Save 按鈕或 VKey 11 時保存精確儲存方式；polling 僅能由成功狀態確認時記為 `method=unknown`、`inferred=true`，不再虛構按鈕或 Ctrl+S。
+- 修正 Record Mode 在 native event 啟動失敗後重用跨執行緒 COM proxy，導致 MCP 快照僅有 T-Code、Fields=0 且遺漏後續輸入的問題；錄製開始時會 marshal 當前選定的 SAP session 到監控執行緒，native 不可用時以同一 session 執行 0.3 秒 COM polling，COM 綁定也失敗時才退回 MCP-only。
+- 修正 MCP monitor 將 `GuiLabel`、`GuiBox`、唯讀 `GuiTextField`、Container/Shell 與 Tab caption 誤判為 `FIELD_CHANGE`，造成錄製內容與後續 Skill 步驟異常的問題。
+- 修正 MCP 快照短暫缺少 T-Code / screen metadata 時產生重複 `TCODE_CHANGE` 的問題；現有 SAP session 會用 COM 補齊交易、畫面、活動視窗與焦點資訊，再進行差異比對。
+- 修正畫面跳轉後新出現的可編輯欄位值被視為使用者輸入的問題；新欄位與未聚焦的導航後變更現在標記為系統預設，不會進入操作錄製。
+- 修正 VA01 等深層 subscreen 的買方欄位，以及「所有項目」`GuiTableControl` 中物料、數量、日期與 checkbox/radio cell 無法被 Record Mode 偵測的問題。
+- 修正 MCP 與 COM 對同一 TableControl cell 使用不同 ID 而可能重複錄製的問題，現在統一正規化為 `table_id#r<row>#<column>`。
+- 修正一秒 MCP polling 只記到逐字輸入中間值（例如 `o`、`cu`），並漏掉快速輸入的買方、表格明細、Enter 與儲存動作；原生 Change event 現在於 SAP server communication 前提供完整最終命令序列。
+- 修正表格錄製為內部正規化 ID 後遺失原始 SAP cell ID 的問題；事件新增 `field_key` 用於壓縮，`element_id` / `cell_id` 保留可重播的完整元件 ID。
+- 修正 Monitor 在 MCP 模式下遺漏 VA01 客戶編號（KUNNR）等非 input 欄位的問題，透過 COM 補讀 Grid cells 解決。
+
 ## [0.15.0] - 2026-06-24
 
 #### Added
 - 新增 `sap_skill_library.py` SAP 模組知識庫（`SAP_MODULES`）：預建 MM（物料管理）、SD（銷售配銷）、FI（財務會計）模組的交易碼對應、關鍵詞與建議 skill 清單，供 `/guide`、`/study` 等入口依模組自動推薦學習路徑。
 - 新增 `sop_step_parser.py` SOP 步驟解析器：`parse_sop_steps()`、`steps_confidence()`、`vkey_label()`、`clean_step_instruction()` 等工具，供 Study Mode 將 Markdown SOP 拆解為結構化 `StepItem`，支援信心度評估與步驟清單格式化。
-- 新增 `sap_monitor.py` Grid cell 補抓：`_read_grid_view_cells()` 與 `_collect_grid_cells()`，可在 MCP monitor 模式下用 COM 補讀 `GuiGridView` 的儲存格內容（上限 `MAX_GRID_ROWS=100`、`MAX_GRID_COLS=30`），解決 VA01 等畫面 KUNNR 等深層欄位在 MCP 模式下遺漏的問題。
 - 新增 `llm_brain.py` Study Mode 專用畫面快照方法 `_study_post_tool_screen()`：工具執行後只回傳 tcode / title / screen_number / status_bar 與錯誤時的前 10 個可改欄位，避免 context 膨脹；MCP path 優先使用 `sap_get_screen_info`，失敗時回退 legacy COM scan。
 - 新增 `STUDY_MAX_ITERATIONS` 環境變數，控制 Study Mode 每輪最大迭代次數（預設 20），與 Auto Mode 獨立設定。
 - 新增 `.mcp.json`、`PRESENTATION.md`、`PROJECT_OVERVIEW.md`、`UPDATES_v0.14.md` 文件。
@@ -21,10 +51,6 @@
 #### Changed
 - `mcp_client.py` Windows 中文路徑修正：在 Windows 且未設定 `MCP_SAP_LOCAL_COMMAND` 時，若 `external/mcp-sap-gui/.venv/Scripts/python.exe` 存在，改以 venv Python 搭配 `-X utf8` 直接啟動 server，繞過 `uv` 在 CJK 使用者名稱路徑下 site.py decode 崩潰的問題。
 - `mcp_client.py` 新增 `_fix_venv_pth_files()`：將 uv 寫入的 editable-install `.pth` 絕對非 ASCII 路徑轉換為相對路徑，提升跨環境相容性。
-- `mcp_client.py` `capture_mcp()` 新增 `session` 參數：MCP monitor 模式下同時用 COM 補讀 `capture_editable_fields()`，MCP 已有的欄位維持優先，COM 只補缺漏欄位，提升 monitor 欄位覆蓋率。
-- `sap_recorder.py` SOP 壓縮邏輯優化：`FIELD_DEFAULT` 事件不再合入 SOP steps（`NOISY_EVENT_TYPES`），`system_default=True` 的事件也一律跳過，避免 SAP 系統預設值污染錄製內容；`FIELD_CHANGE` 與 `FIELD_DEFAULT` 分離處理，前者才顯示 `short_id = "value"` 格式。
-- `sap_recorder.py` Grid row ID 解析改善：`#r` 後綴的 element ID 改以 `rsplit("#r", 1)` 取得列索引，提升 ALV Grid 錄製準確度。
-- `sap_monitor.py` 畫面快照過濾：Tab 標籤元件（`/tabs`、`/tabp`）不再記入 `field_values`，避免 Tab caption 污染欄位差異偵測。
 - `sap_agent_tools.py` `visualize_element()` 高亮停留時間從 1.2 秒縮短至 0.5 秒，加快 Study Mode 引導節奏；預設 `duration_seconds` 同步調整。
 - `sap_agent_tools.py` `execute_transaction()` 導航邏輯強化：若目前不在起始畫面（非 `SESSION_MANAGER` / `S000`），且 T-Code 未以 `/` 開頭，自動加上 `/n` 前綴，避免在已開啟的交易中直接送裸 T-Code 造成跳轉失敗。
 - `sap_login.py` 重構為 function-based 架構：新增 `_env()`、`_require_env()`、`_open_sap_logon()`、`_get_sap_application()`、`_open_connection()` 輔助函式；登入失敗時提供更詳細的錯誤訊息與 `.env` 設定提示；支援 `SAP_CONNECTION` 新欄位（相容舊 `connection=`）；SAP Logon 啟動改用 `subprocess.Popen([path])` 並驗證路徑存在。
@@ -34,7 +60,6 @@
 #### Fixed
 - 修正 Windows CJK 路徑（如桌面含中文的使用者名稱）下，`uv` 啟動 MCP server 時 `site.py` 因 cp950 解碼失敗而崩潰的問題。
 - 修正 `sap_login.py` 使用 `subprocess.Popen(os.getenv(...))` 傳入字串在路徑含空白時解析異常的問題，改為傳入 list。
-- 修正 Monitor 在 MCP 模式下遺漏 VA01 客戶編號（KUNNR）等非 input 欄位的問題，透過 COM 補讀 Grid cells 解決。
 
 ## [0.14.0]
 

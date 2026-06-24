@@ -10,7 +10,7 @@ import os
 import re
 from datetime import datetime
 
-from sap_recorder import RECORDINGS_DIR, SAPRecorder
+from sap_recorder import RECORDINGS_DIR, SAPRecorder, format_field_target
 
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -357,16 +357,20 @@ class SAPSkillLibrary:
 
         if raw_events is None:
             raw_events = events
-            events = SAPRecorder._compact_events(raw_events)
-            normalized["raw_events"] = raw_events
-            normalized["events"] = events
-
-        normalized["raw_event_count"] = len(normalized.get("raw_events", []))
-        normalized["event_count"] = len(normalized.get("events", []))
+        events = SAPRecorder._compact_events(raw_events)
+        context_events = SAPRecorder._compact_context_events(
+            list(normalized.get("context_events", []))
+            + SAPRecorder._extract_context_events(raw_events)
+        )
+        normalized["raw_events"] = raw_events
+        normalized["events"] = events
+        normalized["context_events"] = context_events
+        normalized["raw_event_count"] = len(raw_events)
+        normalized["event_count"] = len(events)
+        normalized["context_event_count"] = len(context_events)
         if "duration_seconds" not in normalized:
             normalized["duration_seconds"] = 0
-        if not normalized.get("summary"):
-            normalized["summary"] = SAPRecorder._generate_summary(normalized.get("events", []))
+        normalized["summary"] = SAPRecorder._generate_summary(events)
 
         return normalized
 
@@ -380,6 +384,8 @@ class SAPSkillLibrary:
         lines.append(f"檔案: {data.get('filepath', '')}")
         lines.append(f"建立時間: {data.get('created_at', 'N/A')}")
         lines.append(f"操作數量: {data.get('event_count', 0)}")
+        if data.get("context_event_count"):
+            lines.append(f"畫面脈絡數量: {data.get('context_event_count', 0)}")
         if data.get("raw_event_count") and data.get("raw_event_count") != data.get("event_count"):
             lines.append(f"原始事件數量: {data.get('raw_event_count')}")
         lines.append(f"持續時間: {data.get('duration_seconds', 0)} 秒")
@@ -405,9 +411,22 @@ class SAPSkillLibrary:
         if event_type == "SCREEN_CHANGE":
             return f"畫面跳轉: {details.get('from_screen', '?')} -> {details.get('to_screen', '?')} ({details.get('title', '')})"
         if event_type == "FIELD_CHANGE":
-            elem_id = details.get("element_id", "?")
-            short_id = elem_id.split("/")[-1] if "/" in elem_id else elem_id
-            return f"填入欄位: {short_id} = \"{details.get('to_value', '')}\""
+            target = format_field_target(details)
+            action = "設定表格欄位" if details.get("table_id") or "#r" in str(details.get("element_id", "")) else "填入欄位"
+            return f"{action}: {target} = \"{details.get('to_value', '')}\""
+        if event_type == "KEY_PRESS":
+            return f"按鍵: {details.get('key_name', details.get('vkey', '?'))} ({details.get('element_id', 'wnd[0]')})"
+        if event_type == "BUTTON_CLICK":
+            return f"按下按鈕: {details.get('element_id', '?')} ({details.get('action', 'press')})"
+        if event_type == "SAVE_ACTION":
+            method = details.get("method", "unknown")
+            if details.get("inferred"):
+                return "儲存文件（已由 SAP 成功狀態確認；實際觸發方式未記錄）"
+            if method == "button":
+                return f"按下儲存按鈕: {details.get('element_id', '?')}"
+            return f"執行儲存快捷鍵: {details.get('key_name', 'Ctrl+S/Save')}"
+        if event_type == "TAB_SELECT":
+            return f"選取頁籤: {details.get('element_id', '?')}"
         if event_type == "ACTIVE_WINDOW_CHANGE":
             return f"活動視窗變更: {details.get('from_window', '?')} -> {details.get('to_window', '?')} ({details.get('title', '')})"
         if event_type == "WINDOW_OPEN":

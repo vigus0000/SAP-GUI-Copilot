@@ -10,12 +10,116 @@ SAP GUI 操作紀錄管理器
 
 import json
 import os
+import re
 from datetime import datetime
 
 from llm_provider import create_llm_provider, normalize_provider_name
 
 
 NOISY_EVENT_TYPES = {"FOCUS_CHANGE", "FIELD_DEFAULT"}
+USER_OPERATION_EVENT_TYPES = {
+    "TCODE_CHANGE",
+    "FIELD_CHANGE",
+    "BUTTON_CLICK",
+    "TAB_SELECT",
+    "KEY_PRESS",
+    "CHECKBOX_CHANGE",
+    "RADIO_CHANGE",
+    "COMBO_CHANGE",
+    "TABLE_SELECTION",
+    "SAVE_ACTION",
+}
+CONTEXT_EVENT_TYPES = {
+    "SCREEN_CHANGE",
+    "ACTIVE_WINDOW_CHANGE",
+    "WINDOW_OPEN",
+    "WINDOW_CLOSE",
+    "STATUS_MESSAGE",
+    "SYSTEM_RESET",
+}
+NON_ACTIONABLE_FIELD_ID_FRAGMENTS = (
+    "/lbl",
+    "/box",
+    "/cntl",
+    "/shellcont",
+    "/tabs",
+    "/tabp",
+    "/sbar",
+    "/titl",
+)
+
+
+def _is_actionable_field_id(element_id):
+    value = str(element_id or "")
+    lowered = value.lower()
+    if not value:
+        return False
+    if "#r" in lowered or re.search(r"/tbl[^/]+/[^/\[]+\[\d+,\d+\]$", lowered):
+        return True
+    if any(fragment in lowered for fragment in NON_ACTIONABLE_FIELD_ID_FRAGMENTS):
+        return False
+    leaf = lowered.rsplit("/", 1)[-1]
+    return leaf == "okcd" or leaf.startswith(("ctxt", "txt", "pwd", "cmb", "chk", "rad"))
+
+
+def _is_user_operation_event(event):
+    event_type = str(event.get("event_type", ""))
+    details = event.get("details", {}) or {}
+    if event_type not in USER_OPERATION_EVENT_TYPES:
+        return False
+    if details.get("system_default") or details.get("user_action") is False:
+        return False
+
+    if event_type == "FIELD_CHANGE":
+        if not _is_actionable_field_id(details.get("element_id", "")):
+            return False
+        if str(event.get("source", "")).lower() == "mcp":
+            if not details.get("tcode") and not details.get("screen_number"):
+                return False
+
+    if event_type == "TCODE_CHANGE":
+        from_tcode = str(details.get("from_tcode", "") or "").strip()
+        to_tcode = str(details.get("to_tcode", "") or "").strip()
+        if not to_tcode or from_tcode == to_tcode:
+            return False
+        if str(event.get("source", "")).lower() == "mcp" and not from_tcode:
+            return False
+
+    return True
+
+
+def _is_context_event(event):
+    return str(event.get("event_type", "")) in CONTEXT_EVENT_TYPES
+
+def format_field_target(details):
+    details = details or {}
+    element_id = str(details.get("element_id", "?") or "?")
+    table_id = str(details.get("table_id", "") or "")
+    if table_id or "#r" in element_id:
+        if not table_id:
+            table_id = element_id.split("#r", 1)[0]
+        row = details.get("row")
+        column = str(
+            details.get("column_title")
+            or details.get("column")
+            or (element_id.rsplit("#", 1)[-1] if "#" in element_id else "欄位")
+        )
+        try:
+            row_label = int(row) + 1
+        except (TypeError, ValueError):
+            try:
+                row_label = int(element_id.rsplit("#r", 1)[1].split("#", 1)[0]) + 1
+            except Exception:
+                row_label = "?"
+        table_name = table_id.split("/")[-1] if table_id else "表格"
+        return f"{table_name} 第{row_label}列/{column}"
+
+    return str(
+        details.get("label")
+        or details.get("name")
+        or (element_id.split("/")[-1] if "/" in element_id else element_id)
+    )
+
 
 
 # 錄製檔案儲存目錄
@@ -34,6 +138,8 @@ EVENT_TYPE_LABELS = {
     "FIELD_CHANGE": "✏️ 欄位修改",
     "FIELD_DEFAULT": "🔹 系統預設值",
     "STATUS_MESSAGE": "💬 狀態訊息",
+    "SAVE_ACTION": "💾 儲存",
+    "SYSTEM_RESET": "🔄 系統重置",
 }
 
 
@@ -54,6 +160,8 @@ class SAPRecorder:
         self._recording_name = None
         self._recording_start_time = None
         self._is_recording = False
+        self._recording_start_ts = ""   # ISO timestamp 並列比對，過濾早於錄跟開始的事件
+        self._recording_stop_ts = ""    # 停止錄製後記錄的時間，過濾歘留事件
 
         # 確保錄製目錄存在
         os.makedirs(RECORDINGS_DIR, exist_ok=True)
@@ -86,6 +194,8 @@ class SAPRecorder:
 
         self._recording_name = name
         self._recording_start_time = datetime.now()
+        self._recording_start_ts = self._recording_start_time.isoformat()
+        self._recording_stop_ts = ""  # 清空上次停止時間
         self._current_recording = {
             "name": name,
             "created_at": self._recording_start_time.isoformat(),
@@ -94,6 +204,8 @@ class SAPRecorder:
             "raw_event_count": 0,
             "raw_events": [],
             "events": [],
+            "context_event_count": 0,
+            "context_events": [],
             "summary": "",
         }
         self._is_recording = True
@@ -118,12 +230,17 @@ class SAPRecorder:
         # 計算持續時間
         duration = (datetime.now() - self._recording_start_time).total_seconds()
         raw_events = self._current_recording["raw_events"]
+        context_events = self._compact_context_events(
+            self._current_recording.get("context_events", [])
+        )
         compacted_events = self._compact_events(raw_events)
 
         self._current_recording["duration_seconds"] = round(duration, 1)
         self._current_recording["raw_event_count"] = len(raw_events)
         self._current_recording["events"] = compacted_events
         self._current_recording["event_count"] = len(compacted_events)
+        self._current_recording["context_events"] = context_events
+        self._current_recording["context_event_count"] = len(context_events)
 
         # 自動產生摘要
         self._current_recording["summary"] = self._generate_summary(
@@ -137,11 +254,17 @@ class SAPRecorder:
 
         event_count = self._current_recording["event_count"]
         raw_event_count = self._current_recording["raw_event_count"]
+        context_count = self._current_recording["context_event_count"]
         print(f"\n\033[1;32m  ⏹️ 錄製完成: {self._recording_name}\033[0m")
-        print(f"\033[90m     共記錄 {event_count} 個操作（原始事件 {raw_event_count} 個），持續 {duration:.1f} 秒\033[0m")
+        print(
+            f"\033[90m     共記錄 {event_count} 個使用者操作"
+            f"（原始操作 {raw_event_count} 個、畫面脈絡 {context_count} 個），"
+            f"持續 {duration:.1f} 秒\033[0m"
+        )
         print(f"\033[90m     已儲存至: {filepath}\033[0m")
 
-        # 重置狀態
+        # 重置狀態（先記錄 stop 時間戳，再清空）
+        self._recording_stop_ts = datetime.now().isoformat()  # 【方案 C】記錄停止時間
         self._is_recording = False
         self._current_recording = None
         name = self._recording_name
@@ -158,16 +281,26 @@ class SAPRecorder:
             event: 事件資料 dict
         """
         if not self._is_recording or not self._current_recording:
-            return
+            return False
 
+        # 【方案 C】timestamp guard：過濾停止錄製後才抵達的殘留事件
+        # （monitor 尚未完全停止時，最後一次 poll 可能在 stop_recording 後才發送）
+        event_ts = str(event.get("timestamp", "") or "")
+        if event_ts and self._recording_stop_ts and event_ts > self._recording_stop_ts:
+            return False
         event_type = event.get("event_type", "UNKNOWN")
         details = event.get("details", {})
 
-        # 只儲存使用者操作，跳過系統產生的預設值與雜訊
-        if event_type in NOISY_EVENT_TYPES:
-            return
-        if details.get("system_default", False):
-            return
+        # 畫面跳轉/狀態訊息只作為 Skill 生成的脈絡，不算使用者操作。
+        if _is_context_event(event):
+            context_events = self._current_recording["context_events"]
+            if not context_events or self._context_signature(context_events[-1]) != self._context_signature(event):
+                context_events.append(event)
+            return False
+
+        # 僅保存能確認是使用者輸入、選取或按鍵的事件。
+        if event_type in NOISY_EVENT_TYPES or not _is_user_operation_event(event):
+            return False
 
         self._current_recording["raw_events"].append(event)
 
@@ -182,6 +315,10 @@ class SAPRecorder:
             elem_id = details.get("element_id", "?")
             short_id = elem_id.split("/")[-1] if "/" in elem_id else elem_id
             detail_str = f"{short_id} = \"{details.get('to_value', '')}\""
+        elif event_type == "SAVE_ACTION":
+            method = details.get("method", "unknown")
+            suffix = "（由成功狀態推定）" if details.get("inferred") else ""
+            detail_str = f"method={method}{suffix}"
         elif event_type in ("ACTIVE_WINDOW_CHANGE", "WINDOW_OPEN", "WINDOW_CLOSE"):
             detail_str = f"{details.get('window_id', details.get('to_window', '?'))} {details.get('title', '')}"
         elif event_type == "FOCUS_CHANGE":
@@ -195,6 +332,7 @@ class SAPRecorder:
 
         count = len(self._current_recording["raw_events"])
         print(f"\033[31m  📝 [{count:3d}] {label}  {detail_str}\033[0m")
+        return True
 
     def list_recordings(self) -> list:
         """
@@ -249,17 +387,23 @@ class SAPRecorder:
         with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        # 向後相容舊錄製：舊檔只有 events，讀取時動態產生 compact SOP。
-        if "raw_events" not in data:
+        # 每次載入都重新清理，讓舊錄製也不會把系統載入值送進 Skill。
+        data = dict(data)
+        raw_events = data.get("raw_events")
+        if raw_events is None:
             raw_events = data.get("events", [])
-            compacted_events = self._compact_events(raw_events)
-            data = dict(data)
-            data["raw_events"] = raw_events
-            data["raw_event_count"] = len(raw_events)
-            data["events"] = compacted_events
-            data["event_count"] = len(compacted_events)
-            data["summary"] = self._generate_summary(compacted_events)
-
+        derived_context = self._extract_context_events(raw_events)
+        context_events = self._compact_context_events(
+            list(data.get("context_events", [])) + derived_context
+        )
+        compacted_events = self._compact_events(raw_events)
+        data["raw_events"] = raw_events
+        data["raw_event_count"] = len(raw_events)
+        data["events"] = compacted_events
+        data["event_count"] = len(compacted_events)
+        data["context_events"] = context_events
+        data["context_event_count"] = len(context_events)
+        data["summary"] = self._generate_summary(compacted_events)
         return data
 
     def get_recording_summary(self, name: str) -> str:
@@ -280,6 +424,8 @@ class SAPRecorder:
         lines = [f"## SOP 錄製: {data.get('name', name)}"]
         lines.append(f"錄製時間: {data.get('created_at', 'N/A')}")
         lines.append(f"操作數量: {data.get('event_count', 0)}")
+        if data.get("context_event_count"):
+            lines.append(f"畫面脈絡數量: {data.get('context_event_count', 0)}")
         if data.get("raw_event_count") and data.get("raw_event_count") != data.get("event_count"):
             lines.append(f"原始事件數量: {data.get('raw_event_count')}")
         lines.append(f"持續時間: {data.get('duration_seconds', 0)} 秒")
@@ -301,21 +447,27 @@ class SAPRecorder:
             elif event_type == "SCREEN_CHANGE":
                 step = f"畫面跳轉: {details.get('from_screen', '?')} → {details.get('to_screen', '?')} ({details.get('title', '')})"
             elif event_type == "FIELD_CHANGE":
-                elem_id = details.get("element_id", "?")
-                if "#r" in elem_id:
-                    parts = elem_id.rsplit("#r", 1)
-                    grid_short = parts[0].split("/")[-1]
-                    row_col = parts[1].split("#", 1)
-                    row_num = int(row_col[0]) + 1
-                    col_name = row_col[1] if len(row_col) > 1 else "?"
-                    short_id = f"{grid_short} 第{row_num}行/{col_name}"
-                else:
-                    short_id = elem_id.split("/")[-1] if "/" in elem_id else elem_id
-                step = f"填入欄位: {short_id} = \"{details.get('to_value', '')}\""
+                target = format_field_target(details)
+                action = "設定表格欄位" if details.get("table_id") or "#r" in str(details.get("element_id", "")) else "填入欄位"
+                step = f"{action}: {target} = \"{details.get('to_value', '')}\""
             elif event_type == "FIELD_DEFAULT":
                 elem_id = details.get("element_id", "?")
                 short_id = elem_id.split("/")[-1] if "/" in elem_id else elem_id
                 step = f"確認系統預設值: {short_id} = \"{details.get('to_value', '')}\""
+            elif event_type == "KEY_PRESS":
+                step = f"按鍵: {details.get('key_name', details.get('vkey', '?'))} ({details.get('element_id', 'wnd[0]')})"
+            elif event_type == "BUTTON_CLICK":
+                step = f"按下按鈕: {details.get('element_id', '?')} ({details.get('action', 'press')})"
+            elif event_type == "SAVE_ACTION":
+                method = details.get("method", "unknown")
+                if details.get("inferred"):
+                    step = "儲存文件（已由 SAP 成功狀態確認；實際觸發方式未記錄）"
+                elif method == "button":
+                    step = f"按下儲存按鈕: {details.get('element_id', '?')}"
+                else:
+                    step = f"執行儲存快捷鍵: {details.get('key_name', 'Ctrl+S/Save')}"
+            elif event_type == "TAB_SELECT":
+                step = f"選取頁籤: {details.get('element_id', '?')}"
             elif event_type == "ACTIVE_WINDOW_CHANGE":
                 step = f"活動視窗變更: {details.get('from_window', '?')} → {details.get('to_window', '?')} ({details.get('title', '')})"
             elif event_type == "WINDOW_OPEN":
@@ -342,6 +494,20 @@ class SAPRecorder:
         Returns:
             str: 儲存的檔案路徑
         """
+        recording = dict(recording)
+        raw_events = recording.get("raw_events", recording.get("events", []))
+        context_events = self._compact_context_events(
+            list(recording.get("context_events", [])) + self._extract_context_events(raw_events)
+        )
+        events = self._compact_events(raw_events)
+        recording["raw_events"] = raw_events
+        recording["raw_event_count"] = len(raw_events)
+        recording["events"] = events
+        recording["event_count"] = len(events)
+        recording["context_events"] = context_events
+        recording["context_event_count"] = len(context_events)
+        recording["summary"] = self._generate_summary(events)
+
         name = recording.get("name", "import")
         filepath = self._get_filepath(name)
         with open(filepath, "w", encoding="utf-8") as f:
@@ -356,14 +522,81 @@ class SAPRecorder:
         return os.path.join(RECORDINGS_DIR, f"{safe_name}.json")
 
     @staticmethod
-    def _compact_events(events: list) -> list:
-        """
-        將 raw polling events 壓縮成 SOP 步驟。
+    def _context_signature(event):
+        details = event.get("details", {}) or {}
+        event_type = event.get("event_type", "")
+        keys = (
+            "tcode", "from_screen", "to_screen", "from_window", "to_window",
+            "window_id", "title", "type", "text", "reason", "change_count",
+        )
+        return event_type, tuple(str(details.get(key, "")) for key in keys)
 
-        - 同一欄位連續 FIELD_CHANGE 只保留最後值
-        - FOCUS_CHANGE 這類純焦點移動不列入 SOP
-        - T-Code / screen / window / status 事件保留順序
-        """
+    @staticmethod
+    def _compact_context_events(events: list) -> list:
+        compacted = []
+        for event in events or []:
+            if not _is_context_event(event):
+                continue
+            if compacted and SAPRecorder._context_signature(compacted[-1]) == SAPRecorder._context_signature(event):
+                continue
+            compacted.append(json.loads(json.dumps(event, ensure_ascii=False)))
+        return compacted
+
+    @staticmethod
+    def _extract_context_events(events: list) -> list:
+        """Extract screen outcomes and recover screen changes from old transient T-Code events."""
+        context_events = []
+        last_tcode = ""
+        last_screen = ""
+
+        for event in events or []:
+            event_type = event.get("event_type", "")
+            details = event.get("details", {}) or {}
+
+            if _is_context_event(event):
+                context_events.append(event)
+                if event_type == "SCREEN_CHANGE":
+                    last_tcode = str(details.get("tcode", last_tcode) or last_tcode)
+                    last_screen = str(details.get("to_screen", last_screen) or last_screen)
+                continue
+
+            if event_type != "TCODE_CHANGE":
+                continue
+
+            to_tcode = str(details.get("to_tcode", "") or "").strip()
+            from_tcode = str(details.get("from_tcode", "") or "").strip()
+            screen_number = str(details.get("screen_number", "") or "")
+            if _is_user_operation_event(event):
+                last_tcode = to_tcode
+                last_screen = screen_number or last_screen
+                continue
+
+            if (
+                str(event.get("source", "")).lower() == "mcp"
+                and not from_tcode
+                and to_tcode
+                and to_tcode == last_tcode
+            ):
+                if last_screen and screen_number and screen_number != last_screen:
+                    context_events.append({
+                        "timestamp": event.get("timestamp", ""),
+                        "event_type": "SCREEN_CHANGE",
+                        "source": "mcp_recovered",
+                        "details": {
+                            "tcode": to_tcode,
+                            "from_screen": last_screen,
+                            "to_screen": screen_number,
+                            "title": details.get("title", ""),
+                            "user_action": False,
+                        },
+                    })
+                last_screen = screen_number or last_screen
+
+        return SAPRecorder._compact_context_events(context_events)
+
+    @staticmethod
+    def _compact_events(events: list) -> list:
+        """Keep only verified user operations and collapse incremental field typing."""
         compacted = []
         pending_field = None
 
@@ -373,19 +606,23 @@ class SAPRecorder:
                 compacted.append(pending_field)
                 pending_field = None
 
-        for event in events:
-            event_type = event.get("event_type", "")
-            if event_type in NOISY_EVENT_TYPES:
+        for event in events or []:
+            if not _is_user_operation_event(event):
                 continue
 
+            event_type = event.get("event_type", "")
             if event_type == "FIELD_CHANGE":
-                details = event.get("details", {})
-                element_id = details.get("element_id", "")
-                if pending_field and pending_field.get("details", {}).get("element_id") == element_id:
+                details = event.get("details", {}) or {}
+                element_id = details.get("field_key") or details.get("element_id", "")
+                pending_details_current = pending_field.get("details", {}) if pending_field else {}
+                pending_element_id = pending_details_current.get("field_key") or pending_details_current.get("element_id", "")
+                if pending_field and pending_element_id == element_id:
                     pending_details = pending_field["details"]
                     pending_details["to_value"] = details.get("to_value", "")
                     pending_details["tcode"] = details.get("tcode", pending_details.get("tcode", ""))
-                    pending_details["screen_number"] = details.get("screen_number", pending_details.get("screen_number", ""))
+                    pending_details["screen_number"] = details.get(
+                        "screen_number", pending_details.get("screen_number", "")
+                    )
                     pending_field["timestamp"] = event.get("timestamp", pending_field.get("timestamp", ""))
                 else:
                     flush_pending_field()
@@ -393,7 +630,15 @@ class SAPRecorder:
                 continue
 
             flush_pending_field()
-            compacted.append(event)
+            if event_type == "TCODE_CHANGE" and compacted:
+                previous = compacted[-1]
+                if (
+                    previous.get("event_type") == "TCODE_CHANGE"
+                    and previous.get("details", {}).get("to_tcode")
+                    == event.get("details", {}).get("to_tcode")
+                ):
+                    continue
+            compacted.append(json.loads(json.dumps(event, ensure_ascii=False)))
 
         flush_pending_field()
         return compacted
@@ -416,6 +661,7 @@ class SAPRecorder:
         tcodes = []
         field_changes = 0
         screen_events = 0
+        save_actions = 0
 
         for event in events:
             event_type = event.get("event_type", "")
@@ -427,6 +673,8 @@ class SAPRecorder:
                     tcodes.append(to_tcode)
             elif event_type == "FIELD_CHANGE":
                 field_changes += 1
+            elif event_type == "SAVE_ACTION":
+                save_actions += 1
             elif event_type in ("SCREEN_CHANGE", "ACTIVE_WINDOW_CHANGE", "WINDOW_OPEN", "WINDOW_CLOSE"):
                 screen_events += 1
 
@@ -434,13 +682,15 @@ class SAPRecorder:
             parts.append(f"涉及交易: {' → '.join(tcodes)}")
         if field_changes:
             parts.append(f"修改了 {field_changes} 個欄位")
+        if save_actions:
+            parts.append(f"執行了 {save_actions} 次儲存")
         if screen_events:
             parts.append(f"偵測到 {screen_events} 個畫面/視窗變化")
         parts.append(f"共 {len(events)} 個操作步驟")
 
         return "，".join(parts)
 
-    def generate_sop_with_llm(self, name, events, auth=None, screen_state=None, provider=None, provider_name=None):
+    def generate_sop_with_llm(self, name, events, auth=None, screen_state=None, provider=None, provider_name=None, context_events=None):
         """
         使用 LLM 將錄製的 raw events 轉換為自然語言 SOP 指南。
 
@@ -455,8 +705,19 @@ class SAPRecorder:
         Returns:
             str: 儲存的 .md 檔案路徑，失敗時回傳空字串
         """
+        # Defense in depth: never send dirty legacy events directly to the LLM.
+        verified_events = self._compact_events(events)
+        derived_context = self._extract_context_events(events)
+        verified_context = self._compact_context_events(
+            list(context_events or []) + derived_context
+        )
+
         # Use compact JSON to minimise token usage
+        events = verified_events
         events_json = json.dumps(events, ensure_ascii=False)
+        context_json = json.dumps(verified_context, ensure_ascii=False)
+        if len(context_json) > 40_000:
+            context_json = context_json[:40_000] + "... (truncated)"
 
         # Truncate events list if the JSON is still too large (~4 chars per token,
         # target ≤ 80 k tokens for events to leave headroom for prompt + screen context)
@@ -493,9 +754,14 @@ class SAPRecorder:
 ## 錄製名稱
 {name}
 
-## 錄製事件（JSON）
+## 已驗證的使用者操作（JSON）
 ```json
 {events_json}
+```
+
+## 畫面結果與系統脈絡（JSON，僅供驗證結果，不是使用者操作）
+```json
+{context_json}
 ```
 {truncation_note}{screen_context}
 
@@ -506,10 +772,17 @@ class SAPRecorder:
 4. 步驟應該是使用者可以跟著做的指引，不是技術日誌
 5. 在開頭簡述這個 SOP 的目的
 6. 如果有 T-Code，明確說明要進入哪個交易
-7. 如果事件類型是 FIELD_DEFAULT 或 details.system_default=true，代表畫面跳轉後 SAP 自動帶出的預設值，不是使用者手動輸入；不要寫成「請輸入」，最多描述為「確認系統已預設」或直接略過
-8. 如果欄位在畫面上已有可接受的目前值，Study Mode 應引導使用者確認沿用，而不是要求重新輸入錄製值
-9. element_id 格式為 `{{grid_id}}#r{{row}}#{{col}}` 的是 ALV Grid 的 cell，row 從 0 起算；描述時說明「第 N 行（列）的 XXX 欄位」，N = row+1
-10. 直接輸出 Markdown 格式的 SOP，不要加額外的包裝或說明
+7. 「已驗證的使用者操作」是唯一可轉成操作步驟的資料；不要把畫面標籤、唯讀輸出值、Frame、Container 或系統載入值寫成使用者輸入
+8. 「畫面結果與系統脈絡」只能用來確認前一步結果、彈窗或畫面跳轉；不得單獨編造成點擊、輸入或選取動作
+9. 如果脈絡顯示畫面已跳轉但缺少明確按鍵事件，可以寫成「完成前述輸入後執行/按 Enter，確認進入下一畫面」，並標註此動作是由畫面結果推定
+10. 如果欄位在畫面上已有可接受的目前值，Study Mode 應引導使用者確認沿用，而不是要求重新輸入錄製值
+11. element_id 格式為 `{{table_id}}#r{{row}}#{{col}}` 的是 ALV Grid 或 GuiTableControl cell，row 從 0 起算；優先使用 details.column_title / column，描述為「表格第 N 列的 XXX 欄位」，N = row+1
+12. 嚴格維持事件順序；KEY_PRESS、BUTTON_CLICK、TAB_SELECT、SAVE_ACTION 必須各自轉成明確步驟。SAVE_ACTION.inferred=true 代表已由成功狀態確認儲存，但不得虛構為點擊按鈕或 Ctrl+S；inferred=false 時才依 method 描述實際按鈕或快捷鍵
+13. 對客戶編號、採購單號、物料號、數量、價格等每次會改變的業務值，使用「輸入適當的值（參考值：`錄製值`）」；T-Code、固定文件類型或固定選項可直接寫錄製值
+14. 若同一欄位有逐字輸入，僅使用 compact event 的最終值；不得把中途字串（例如 `o`、`cu`）當作完成值
+15. SYSTEM_RESET 是 SAP 在成功儲存後自動清空或重設畫面的系統結果，只能作為脈絡，不得產生刪除、清空或取消勾選步驟
+16. 如果已驗證操作不足以形成完整流程，加入「待人工確認」段落，不得用 SAP 常識補造不存在的步驟
+17. 直接輸出 Markdown 格式的 SOP，不要加額外的包裝或說明
 
 ## 輸出格式範例
 # SOP: [名稱]

@@ -184,6 +184,9 @@ MCP_SAP_SESSION_INFO_TOOLS=sap_get_session_info,sap_get_current_session_info
 MCP_SAP_SET_FOCUS_TOOLS=sap_set_focus,sap_focus_element
 MCP_SAP_MONITOR_ENABLED=true
 MCP_SAP_MONITOR_POLL_SECONDS=1.0
+SAP_NATIVE_RECORD_EVENTS=true
+SAP_RECORD_CONTEXT_POLL_SECONDS=0.5
+SAP_MONITOR_MAX_FIELDS=600
 
 # Study Mode
 STUDY_PREFIX_TCODE_OUTSIDE_START=true
@@ -332,11 +335,17 @@ Phase 2.1 新增 MCP speed mode：
 - 同畫面多欄輸入會提示模型優先使用 `sap_set_batch_fields`，減少逐欄 tool call 與重掃
 - `MCP_TIMING_DEBUG=true` 可列印 LLM API、MCP call、screen scan 耗時，方便比對優化前後
 
-Phase 3 已將 `sap_monitor.py` 改為 MCP-first polling：
+Record Mode 的監控順序：
 
-- Record Mode 背景監控會優先使用 MCP session/screen tools 產生 snapshot
-- 若 MCP 初始化或初始快照失敗，會自動切回舊 pywin32 COM monitor
-- MCP monitor 預設每秒 polling，可用 `MCP_SAP_MONITOR_POLL_SECONDS` 調整
+- `SAP_NATIVE_RECORD_EVENTS=true` 時，優先啟用 SAP GUI Scripting 的 `GuiSession.Record` / `Change` event，直接取得 Text、Selected、Press、sendVKey 等命令；這是欄位最終值、Enter、工具列按鈕與儲存動作的主要來源
+- 錄製開始時會將當前選定的 SAP session marshal 到監控執行緒，避免跨執行緒 COM proxy 失效或誤連其他 session
+- native event 不可用時，使用同一個 thread-local COM session 以 `poll_interval`（預設 0.3 秒）擷取深層欄位與表格；只有 COM session 也無法綁定時才使用 MCP-only polling
+- MCP-only monitor 預設每秒 polling，可用 `MCP_SAP_MONITOR_POLL_SECONDS` 調整
+- native event 運作時，polling 仍用來補充畫面跳轉與狀態脈絡；`SAP_RECORD_CONTEXT_POLL_SECONDS` 控制脈絡掃描頻率
+- Record Mode 會以與 `/scan` 相同的深層 DOM 遍歷補讀 `GuiTableControl` / `GuiGridView` 可編輯 cell；`SAP_MONITOR_MAX_FIELDS` 控制每次快照最多追蹤的欄位與 cell 數量（預設 600）
+- 表格 cell 內部會正規化為 `table_id#r<row>#<column>` 供事件壓縮，同時保留 SAP 原始完整 cell ID 供 Skill 與重播使用
+- Polling 偵測到成功儲存狀態（MessageType `S` 且訊息含「已儲存」/`saved`/`gesichert`）時，會產生 `SAVE_ACTION`；若同一快照有多個欄位由非空值重設為空白或由 True 變 False，會聚合成 context-only 的 `SYSTEM_RESET`，不再產生清空操作步驟
+- Native event 讀到標準儲存按鈕 `wnd[0]/tbar[0]/btn[11]` 或 VKey 11 時，`SAVE_ACTION.inferred=false` 並保留實際 method；polling 只能由成功狀態確認時使用 `method=unknown`、`inferred=true`
 
 ---
 

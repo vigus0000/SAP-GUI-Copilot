@@ -1,0 +1,730 @@
+{
+  "name": "VA01",
+  "created_at": "2026-06-24T22:45:42.133323",
+  "duration_seconds": 92.3,
+  "event_count": 10,
+  "raw_event_count": 15,
+  "raw_events": [
+    {
+      "timestamp": "2026-06-24T22:45:48.640012",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/tbar[0]/okcd",
+        "field_key": "wnd[0]/tbar[0]/okcd",
+        "from_value": "",
+        "to_value": "V",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false,
+        "user_action": true,
+        "control_type": "GuiOkCodeField",
+        "name": "okcd",
+        "source": "com_field"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:45:49.993668",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/tbar[0]/okcd",
+        "field_key": "wnd[0]/tbar[0]/okcd",
+        "from_value": "V",
+        "to_value": "VA",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false,
+        "user_action": true,
+        "control_type": "GuiOkCodeField",
+        "name": "okcd",
+        "source": "com_field"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:45:51.348148",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/tbar[0]/okcd",
+        "field_key": "wnd[0]/tbar[0]/okcd",
+        "from_value": "VA",
+        "to_value": "VA01",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false,
+        "user_action": true,
+        "control_type": "GuiOkCodeField",
+        "name": "okcd",
+        "source": "com_field"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:45:54.715247",
+      "event_type": "TCODE_CHANGE",
+      "details": {
+        "from_tcode": "SESSION_MANAGER",
+        "to_tcode": "VA01",
+        "screen_number": "101",
+        "title": "建立銷售文件"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:45:58.915156",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtVBAK-AUART",
+        "field_key": "wnd[0]/usr/ctxtVBAK-AUART",
+        "from_value": "",
+        "to_value": "OR",
+        "tcode": "VA01",
+        "screen_number": "101",
+        "system_default": false,
+        "user_action": true,
+        "control_type": "GuiCTextField",
+        "name": "VBAK-AUART",
+        "source": "com_field"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:00.366236",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtVBAK-AUART",
+        "field_key": "wnd[0]/usr/ctxtVBAK-AUART",
+        "from_value": "OR",
+        "to_value": "OR1",
+        "tcode": "VA01",
+        "screen_number": "101",
+        "system_default": false,
+        "user_action": true,
+        "control_type": "GuiCTextField",
+        "name": "VBAK-AUART",
+        "source": "com_field"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:06.029560",
+      "event_type": "KEY_PRESS",
+      "source": "polling_inferred",
+      "details": {
+        "vkey": 0,
+        "key_name": "Enter",
+        "element_id": "wnd[0]",
+        "tcode": "VA01",
+        "screen_number": "101",
+        "user_action": true,
+        "inferred": true
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:15.995386",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/subSUBSCREEN_HEADER:SAPMV45A:4021/subPART-SUB:SAPMV45A:4701/ctxtKUAGV-KUNNR",
+        "field_key": "wnd[0]/usr/subSUBSCREEN_HEADER:SAPMV45A:4021/subPART-SUB:SAPMV45A:4701/ctxtKUAGV-KUNNR",
+        "from_value": "",
+        "to_value": "c000",
+        "tcode": "VA01",
+        "screen_number": "4001",
+        "system_default": false,
+        "user_action": true,
+        "control_type": "GuiCTextField",
+        "name": "KUAGV-KUNNR",
+        "source": "com_field"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:18.824373",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/subSUBSCREEN_HEADER:SAPMV45A:4021/subPART-SUB:SAPMV45A:4701/ctxtKUAGV-KUNNR",
+        "field_key": "wnd[0]/usr/subSUBSCREEN_HEADER:SAPMV45A:4021/subPART-SUB:SAPMV45A:4701/ctxtKUAGV-KUNNR",
+        "from_value": "c000",
+        "to_value": "c00010",
+        "tcode": "VA01",
+        "screen_number": "4001",
+        "system_default": false,
+        "user_action": true,
+        "control_type": "GuiCTextField",
+        "name": "KUAGV-KUNNR",
+        "source": "com_field"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:24.944605",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/subSUBSCREEN_HEADER:SAPMV45A:4021/txtVBKD-BSTKD",
+        "field_key": "wnd[0]/usr/subSUBSCREEN_HEADER:SAPMV45A:4021/txtVBKD-BSTKD",
+        "from_value": "",
+        "to_value": "cu10",
+        "tcode": "VA01",
+        "screen_number": "4001",
+        "system_default": false,
+        "user_action": true,
+        "control_type": "GuiTextField",
+        "name": "VBKD-BSTKD",
+        "source": "com_field"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:33.266016",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/ctxtRV45A-MABNR[1,0]",
+        "field_key": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG#r0#RV45A-MABNR",
+        "from_value": "",
+        "to_value": "MAT_0",
+        "tcode": "VA01",
+        "screen_number": "4001",
+        "system_default": false,
+        "user_action": true,
+        "cell_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/ctxtRV45A-MABNR[1,0]",
+        "control_type": "GuiCTextField",
+        "table_type": "GuiTableControl",
+        "table_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG",
+        "row": 0,
+        "visible_row": 0,
+        "column_index": 1,
+        "column": "RV45A-MABNR",
+        "column_title": "物料",
+        "source": "com_table_control"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:37.177426",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/ctxtRV45A-MABNR[1,0]",
+        "field_key": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG#r0#RV45A-MABNR",
+        "from_value": "MAT_0",
+        "to_value": "MAT_010",
+        "tcode": "VA01",
+        "screen_number": "4001",
+        "system_default": false,
+        "user_action": true,
+        "cell_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/ctxtRV45A-MABNR[1,0]",
+        "control_type": "GuiCTextField",
+        "table_type": "GuiTableControl",
+        "table_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG",
+        "row": 0,
+        "visible_row": 0,
+        "column_index": 1,
+        "column": "RV45A-MABNR",
+        "column_title": "物料",
+        "source": "com_table_control"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:40.794398",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/txtRV45A-KWMENG[3,0]",
+        "field_key": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG#r0#RV45A-KWMENG",
+        "from_value": "",
+        "to_value": "5",
+        "tcode": "VA01",
+        "screen_number": "4001",
+        "system_default": false,
+        "user_action": true,
+        "cell_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/txtRV45A-KWMENG[3,0]",
+        "control_type": "GuiTextField",
+        "table_type": "GuiTableControl",
+        "table_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG",
+        "row": 0,
+        "visible_row": 0,
+        "column_index": 3,
+        "column": "RV45A-KWMENG",
+        "column_title": "訂單數量",
+        "source": "com_table_control"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:55.416040",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/txtKOMV-KBETR[15,0]",
+        "field_key": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG#r0#KOMV-KBETR",
+        "from_value": "",
+        "to_value": "500.00 ",
+        "tcode": "VA01",
+        "screen_number": "4001",
+        "system_default": false,
+        "user_action": true,
+        "cell_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/txtKOMV-KBETR[15,0]",
+        "control_type": "GuiTextField",
+        "table_type": "GuiTableControl",
+        "table_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG",
+        "row": 0,
+        "visible_row": 0,
+        "column_index": 15,
+        "column": "KOMV-KBETR",
+        "column_title": "金額",
+        "source": "com_table_control"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:47:07.816153",
+      "event_type": "SAVE_ACTION",
+      "source": "polling_inferred",
+      "details": {
+        "action": "save",
+        "method": "unknown",
+        "inferred": true,
+        "status_type": "S",
+        "status_text": "已儲存 標準訂單 11140",
+        "tcode": "VA01",
+        "screen_number": "4001",
+        "user_action": true
+      }
+    }
+  ],
+  "events": [
+    {
+      "timestamp": "2026-06-24T22:45:51.348148",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/tbar[0]/okcd",
+        "field_key": "wnd[0]/tbar[0]/okcd",
+        "from_value": "",
+        "to_value": "VA01",
+        "tcode": "SESSION_MANAGER",
+        "screen_number": "100",
+        "system_default": false,
+        "user_action": true,
+        "control_type": "GuiOkCodeField",
+        "name": "okcd",
+        "source": "com_field"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:45:54.715247",
+      "event_type": "TCODE_CHANGE",
+      "details": {
+        "from_tcode": "SESSION_MANAGER",
+        "to_tcode": "VA01",
+        "screen_number": "101",
+        "title": "建立銷售文件"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:00.366236",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtVBAK-AUART",
+        "field_key": "wnd[0]/usr/ctxtVBAK-AUART",
+        "from_value": "",
+        "to_value": "OR1",
+        "tcode": "VA01",
+        "screen_number": "101",
+        "system_default": false,
+        "user_action": true,
+        "control_type": "GuiCTextField",
+        "name": "VBAK-AUART",
+        "source": "com_field"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:06.029560",
+      "event_type": "KEY_PRESS",
+      "source": "polling_inferred",
+      "details": {
+        "vkey": 0,
+        "key_name": "Enter",
+        "element_id": "wnd[0]",
+        "tcode": "VA01",
+        "screen_number": "101",
+        "user_action": true,
+        "inferred": true
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:18.824373",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/subSUBSCREEN_HEADER:SAPMV45A:4021/subPART-SUB:SAPMV45A:4701/ctxtKUAGV-KUNNR",
+        "field_key": "wnd[0]/usr/subSUBSCREEN_HEADER:SAPMV45A:4021/subPART-SUB:SAPMV45A:4701/ctxtKUAGV-KUNNR",
+        "from_value": "",
+        "to_value": "c00010",
+        "tcode": "VA01",
+        "screen_number": "4001",
+        "system_default": false,
+        "user_action": true,
+        "control_type": "GuiCTextField",
+        "name": "KUAGV-KUNNR",
+        "source": "com_field"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:24.944605",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/subSUBSCREEN_HEADER:SAPMV45A:4021/txtVBKD-BSTKD",
+        "field_key": "wnd[0]/usr/subSUBSCREEN_HEADER:SAPMV45A:4021/txtVBKD-BSTKD",
+        "from_value": "",
+        "to_value": "cu10",
+        "tcode": "VA01",
+        "screen_number": "4001",
+        "system_default": false,
+        "user_action": true,
+        "control_type": "GuiTextField",
+        "name": "VBKD-BSTKD",
+        "source": "com_field"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:37.177426",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/ctxtRV45A-MABNR[1,0]",
+        "field_key": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG#r0#RV45A-MABNR",
+        "from_value": "",
+        "to_value": "MAT_010",
+        "tcode": "VA01",
+        "screen_number": "4001",
+        "system_default": false,
+        "user_action": true,
+        "cell_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/ctxtRV45A-MABNR[1,0]",
+        "control_type": "GuiCTextField",
+        "table_type": "GuiTableControl",
+        "table_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG",
+        "row": 0,
+        "visible_row": 0,
+        "column_index": 1,
+        "column": "RV45A-MABNR",
+        "column_title": "物料",
+        "source": "com_table_control"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:40.794398",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/txtRV45A-KWMENG[3,0]",
+        "field_key": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG#r0#RV45A-KWMENG",
+        "from_value": "",
+        "to_value": "5",
+        "tcode": "VA01",
+        "screen_number": "4001",
+        "system_default": false,
+        "user_action": true,
+        "cell_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/txtRV45A-KWMENG[3,0]",
+        "control_type": "GuiTextField",
+        "table_type": "GuiTableControl",
+        "table_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG",
+        "row": 0,
+        "visible_row": 0,
+        "column_index": 3,
+        "column": "RV45A-KWMENG",
+        "column_title": "訂單數量",
+        "source": "com_table_control"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:55.416040",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/txtKOMV-KBETR[15,0]",
+        "field_key": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG#r0#KOMV-KBETR",
+        "from_value": "",
+        "to_value": "500.00 ",
+        "tcode": "VA01",
+        "screen_number": "4001",
+        "system_default": false,
+        "user_action": true,
+        "cell_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/txtKOMV-KBETR[15,0]",
+        "control_type": "GuiTextField",
+        "table_type": "GuiTableControl",
+        "table_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG",
+        "row": 0,
+        "visible_row": 0,
+        "column_index": 15,
+        "column": "KOMV-KBETR",
+        "column_title": "金額",
+        "source": "com_table_control"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:47:07.816153",
+      "event_type": "SAVE_ACTION",
+      "source": "polling_inferred",
+      "details": {
+        "action": "save",
+        "method": "unknown",
+        "inferred": true,
+        "status_type": "S",
+        "status_text": "已儲存 標準訂單 11140",
+        "tcode": "VA01",
+        "screen_number": "4001",
+        "user_action": true
+      }
+    }
+  ],
+  "context_event_count": 6,
+  "context_events": [
+    {
+      "timestamp": "2026-06-24T22:46:06.029560",
+      "event_type": "SCREEN_CHANGE",
+      "details": {
+        "tcode": "VA01",
+        "from_screen": "101",
+        "to_screen": "4001",
+        "title": "建立 標準訂單：概觀"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:21.967894",
+      "event_type": "STATUS_MESSAGE",
+      "details": {
+        "type": "W",
+        "text": "輸入 客戶參考",
+        "tcode": "VA01",
+        "screen_number": "4001"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:51.283160",
+      "event_type": "STATUS_MESSAGE",
+      "details": {
+        "type": "S",
+        "text": "定價錯誤﹕必要條件 PPR0 不存在",
+        "tcode": "VA01",
+        "screen_number": "4001"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:46:59.369140",
+      "event_type": "STATUS_MESSAGE",
+      "details": {
+        "type": "S",
+        "text": "000010 : PPR0    500.00 USD OK",
+        "tcode": "VA01",
+        "screen_number": "4001"
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:47:07.816153",
+      "event_type": "SYSTEM_RESET",
+      "source": "polling_system",
+      "details": {
+        "reason": "save_success",
+        "changes": [
+          {
+            "element_id": "wnd[0]/usr/subSUBSCREEN_HEADER:SAPMV45A:4021/txtVBKD-BSTKD",
+            "field_key": "wnd[0]/usr/subSUBSCREEN_HEADER:SAPMV45A:4021/txtVBKD-BSTKD",
+            "from_value": "cu10",
+            "to_value": "",
+            "tcode": "VA01",
+            "screen_number": "4001",
+            "system_default": true,
+            "user_action": false,
+            "control_type": "GuiTextField",
+            "name": "VBKD-BSTKD",
+            "source": "com_field"
+          },
+          {
+            "element_id": "wnd[0]/usr/subSUBSCREEN_HEADER:SAPMV45A:4021/subPART-SUB:SAPMV45A:4701/ctxtKUAGV-KUNNR",
+            "field_key": "wnd[0]/usr/subSUBSCREEN_HEADER:SAPMV45A:4021/subPART-SUB:SAPMV45A:4701/ctxtKUAGV-KUNNR",
+            "from_value": "C00010",
+            "to_value": "",
+            "tcode": "VA01",
+            "screen_number": "4001",
+            "system_default": true,
+            "user_action": false,
+            "control_type": "GuiCTextField",
+            "name": "KUAGV-KUNNR",
+            "source": "com_field"
+          },
+          {
+            "element_id": "wnd[0]/usr/subSUBSCREEN_HEADER:SAPMV45A:4021/subPART-SUB:SAPMV45A:4701/ctxtKUWEV-KUNNR",
+            "field_key": "wnd[0]/usr/subSUBSCREEN_HEADER:SAPMV45A:4021/subPART-SUB:SAPMV45A:4701/ctxtKUWEV-KUNNR",
+            "from_value": "C00010",
+            "to_value": "",
+            "tcode": "VA01",
+            "screen_number": "4001",
+            "system_default": true,
+            "user_action": false,
+            "control_type": "GuiCTextField",
+            "name": "KUWEV-KUNNR",
+            "source": "com_field"
+          },
+          {
+            "element_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/ssubHEADER_FRAME:SAPMV45A:4440/ctxtVBKD-ZTERM",
+            "field_key": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/ssubHEADER_FRAME:SAPMV45A:4440/ctxtVBKD-ZTERM",
+            "from_value": "0001",
+            "to_value": "",
+            "tcode": "VA01",
+            "screen_number": "4001",
+            "system_default": true,
+            "user_action": false,
+            "control_type": "GuiCTextField",
+            "name": "VBKD-ZTERM",
+            "source": "com_field"
+          },
+          {
+            "element_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/ssubHEADER_FRAME:SAPMV45A:4440/ctxtVBKD-INCO1",
+            "field_key": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/ssubHEADER_FRAME:SAPMV45A:4440/ctxtVBKD-INCO1",
+            "from_value": "FOB",
+            "to_value": "",
+            "tcode": "VA01",
+            "screen_number": "4001",
+            "system_default": true,
+            "user_action": false,
+            "control_type": "GuiCTextField",
+            "name": "VBKD-INCO1",
+            "source": "com_field"
+          },
+          {
+            "element_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/ssubHEADER_FRAME:SAPMV45A:4440/ctxtVBKD-INCO2_L",
+            "field_key": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/ssubHEADER_FRAME:SAPMV45A:4440/ctxtVBKD-INCO2_L",
+            "from_value": "Miami",
+            "to_value": "",
+            "tcode": "VA01",
+            "screen_number": "4001",
+            "system_default": true,
+            "user_action": false,
+            "control_type": "GuiCTextField",
+            "name": "VBKD-INCO2_L",
+            "source": "com_field"
+          },
+          {
+            "element_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/ctxtRV45A-MABNR[1,0]",
+            "field_key": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG#r0#RV45A-MABNR",
+            "from_value": "MAT_010",
+            "to_value": "",
+            "tcode": "VA01",
+            "screen_number": "4001",
+            "system_default": true,
+            "user_action": false,
+            "cell_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/ctxtRV45A-MABNR[1,0]",
+            "control_type": "GuiCTextField",
+            "table_type": "GuiTableControl",
+            "table_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG",
+            "row": 0,
+            "visible_row": 0,
+            "column_index": 1,
+            "column": "RV45A-MABNR",
+            "column_title": "物料",
+            "source": "com_table_control"
+          },
+          {
+            "element_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/txtRV45A-KWMENG[3,0]",
+            "field_key": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG#r0#RV45A-KWMENG",
+            "from_value": "5",
+            "to_value": "",
+            "tcode": "VA01",
+            "screen_number": "4001",
+            "system_default": true,
+            "user_action": false,
+            "cell_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/txtRV45A-KWMENG[3,0]",
+            "control_type": "GuiTextField",
+            "table_type": "GuiTableControl",
+            "table_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG",
+            "row": 0,
+            "visible_row": 0,
+            "column_index": 3,
+            "column": "RV45A-KWMENG",
+            "column_title": "訂單數量",
+            "source": "com_table_control"
+          },
+          {
+            "element_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/ctxtVBAP-VRKME[4,0]",
+            "field_key": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG#r0#VBAP-VRKME",
+            "from_value": "EA",
+            "to_value": "",
+            "tcode": "VA01",
+            "screen_number": "4001",
+            "system_default": true,
+            "user_action": false,
+            "cell_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/ctxtVBAP-VRKME[4,0]",
+            "control_type": "GuiCTextField",
+            "table_type": "GuiTableControl",
+            "table_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG",
+            "row": 0,
+            "visible_row": 0,
+            "column_index": 4,
+            "column": "VBAP-VRKME",
+            "column_title": "單位",
+            "source": "com_table_control"
+          },
+          {
+            "element_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/chkVBAPD-EPMEH[5,0]",
+            "field_key": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG#r0#VBAPD-EPMEH",
+            "from_value": "True",
+            "to_value": "False",
+            "tcode": "VA01",
+            "screen_number": "4001",
+            "system_default": true,
+            "user_action": false,
+            "cell_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/chkVBAPD-EPMEH[5,0]",
+            "control_type": "GuiCheckBox",
+            "table_type": "GuiTableControl",
+            "table_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG",
+            "row": 0,
+            "visible_row": 0,
+            "column_index": 5,
+            "column": "VBAPD-EPMEH",
+            "column_title": "S",
+            "source": "com_table_control"
+          },
+          {
+            "element_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/txtVBAP-ARKTX[6,0]",
+            "field_key": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG#r0#VBAP-ARKTX",
+            "from_value": "BENQ 24\"螢幕",
+            "to_value": "",
+            "tcode": "VA01",
+            "screen_number": "4001",
+            "system_default": true,
+            "user_action": false,
+            "cell_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/txtVBAP-ARKTX[6,0]",
+            "control_type": "GuiTextField",
+            "table_type": "GuiTableControl",
+            "table_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG",
+            "row": 0,
+            "visible_row": 0,
+            "column_index": 6,
+            "column": "VBAP-ARKTX",
+            "column_title": "項目說明",
+            "source": "com_table_control"
+          },
+          {
+            "element_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/ctxtVBAP-PSTYV[8,0]",
+            "field_key": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG#r0#VBAP-PSTYV",
+            "from_value": "TAN",
+            "to_value": "",
+            "tcode": "VA01",
+            "screen_number": "4001",
+            "system_default": true,
+            "user_action": false,
+            "cell_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG/ctxtVBAP-PSTYV[8,0]",
+            "control_type": "GuiCTextField",
+            "table_type": "GuiTableControl",
+            "table_id": "wnd[0]/usr/tabsTAXI_TABSTRIP_OVERVIEW/tabpT\\01/ssubSUBSCREEN_BODY:SAPMV45A:4400/subSUBSCREEN_TC:SAPMV45A:4900/tblSAPMV45ATCTRL_U_ERF_AUFTRAG",
+            "row": 0,
+            "visible_row": 0,
+            "column_index": 8,
+            "column": "VBAP-PSTYV",
+            "column_title": "ItCa",
+            "source": "com_table_control"
+          }
+        ],
+        "change_count": 12,
+        "status_type": "S",
+        "status_text": "已儲存 標準訂單 11140",
+        "tcode": "VA01",
+        "screen_number": "4001",
+        "system_default": true,
+        "user_action": false
+      }
+    },
+    {
+      "timestamp": "2026-06-24T22:47:07.816153",
+      "event_type": "STATUS_MESSAGE",
+      "details": {
+        "type": "S",
+        "text": "已儲存 標準訂單 11140",
+        "tcode": "VA01",
+        "screen_number": "4001"
+      }
+    }
+  ],
+  "summary": "涉及交易: VA01，修改了 7 個欄位，執行了 1 次儲存，共 10 個操作步驟"
+}

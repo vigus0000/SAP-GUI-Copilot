@@ -1,0 +1,90 @@
+{
+  "name": "MMBE",
+  "created_at": "2026-06-24T17:42:08.809441",
+  "duration_seconds": 22.9,
+  "event_count": 2,
+  "raw_event_count": 3,
+  "raw_events": [
+    {
+      "timestamp": "2026-06-24T17:42:14.776642",
+      "event_type": "TCODE_CHANGE",
+      "details": {
+        "from_tcode": "SESSION_MANAGER",
+        "to_tcode": "MMBE",
+        "screen_number": "1000",
+        "title": "資料庫選擇"
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T17:42:19.154983",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtMS_MATNR-LOW",
+        "from_value": "MAT_001",
+        "to_value": "MAT_",
+        "tcode": "MMBE",
+        "screen_number": "1000",
+        "system_default": false,
+        "user_action": true
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T17:42:20.622020",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtMS_MATNR-LOW",
+        "from_value": "MAT_",
+        "to_value": "MAT_002",
+        "tcode": "MMBE",
+        "screen_number": "1000",
+        "system_default": false,
+        "user_action": true
+      },
+      "source": "mcp"
+    }
+  ],
+  "events": [
+    {
+      "timestamp": "2026-06-24T17:42:14.776642",
+      "event_type": "TCODE_CHANGE",
+      "details": {
+        "from_tcode": "SESSION_MANAGER",
+        "to_tcode": "MMBE",
+        "screen_number": "1000",
+        "title": "資料庫選擇"
+      },
+      "source": "mcp"
+    },
+    {
+      "timestamp": "2026-06-24T17:42:20.622020",
+      "event_type": "FIELD_CHANGE",
+      "details": {
+        "element_id": "wnd[0]/usr/ctxtMS_MATNR-LOW",
+        "from_value": "MAT_001",
+        "to_value": "MAT_002",
+        "tcode": "MMBE",
+        "screen_number": "1000",
+        "system_default": false,
+        "user_action": true
+      },
+      "source": "mcp"
+    }
+  ],
+  "context_event_count": 1,
+  "context_events": [
+    {
+      "timestamp": "2026-06-24T17:42:26.391375",
+      "event_type": "SCREEN_CHANGE",
+      "details": {
+        "tcode": "MMBE",
+        "from_screen": "1000",
+        "to_screen": "300",
+        "title": "選擇"
+      },
+      "source": "mcp"
+    }
+  ],
+  "summary": "涉及交易: MMBE，修改了 1 個欄位，共 2 個操作步驟"
+}

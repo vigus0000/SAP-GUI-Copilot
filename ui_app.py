@@ -909,7 +909,9 @@ class SAPCopilotWorker(threading.Thread):
         self.monitor = SAPMonitor(session, poll_interval=0.3)
 
         def on_event(event):
-            self.recorder.add_event(event)
+            recorded = self.recorder.add_event(event)
+            if not recorded:
+                return
             event_type = event.get("event_type", "UNKNOWN")
             details = event.get("details", {})
             self.log(f"REC {event_type}: {json.dumps(details, ensure_ascii=False)[:180]}")
@@ -947,6 +949,7 @@ class SAPCopilotWorker(threading.Thread):
                 self.auth,
                 screen_state=screen_state,
                 provider=self.agent.provider,
+                context_events=rec_data.get("context_events", []),
             )
             if sop_path:
                 self.log(f"AI SOP saved: {sop_path}")
@@ -987,6 +990,7 @@ class SAPCopilotWorker(threading.Thread):
                 self.auth,
                 screen_state=None,
                 provider=self.agent.provider if self.agent else None,
+                context_events=recording.get("context_events", []),
             )
             if sop_path:
                 self.log(f"AI SOP 已產生: {sop_path}")
