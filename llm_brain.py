@@ -51,6 +51,73 @@ def env_list(name, default):
     value = os.getenv(name, default)
     return [item.strip() for item in value.split(",") if item.strip()]
 
+MCP_TRANSACTION_PREFIX_RE = re.compile(r"^(?:/(?:N|O|\*)\s*)+", re.IGNORECASE)
+MCP_TRANSACTION_CODE_RE = re.compile(r"^/?[A-Z0-9_]+(?:/[A-Z0-9_]+)*$")
+MCP_NON_STARTABLE_TRANSACTIONS = {"SESSION_MANAGER"}
+
+
+def _extract_transaction_arg(args):
+    if not isinstance(args, dict):
+        return "tcode", ""
+    for key in ("tcode", "transaction", "transaction_code"):
+        if key in args:
+            return key, args.get(key)
+    return "tcode", ""
+
+
+def _validate_mcp_transaction_arg(args):
+    """Return (raw_tcode, normalized_tcode, error) for sap_execute_transaction."""
+    _key, raw = _extract_transaction_arg(args)
+    if not isinstance(raw, str):
+        return raw, "", "Transaction code must be a string."
+
+    value = raw.strip().upper()
+    if not value:
+        return raw, "", "Transaction code cannot be empty."
+
+    while value.startswith("="):
+        value = value[1:].lstrip()
+
+    normalized = MCP_TRANSACTION_PREFIX_RE.sub("", value).strip()
+    if not normalized:
+        return raw, "", (
+            "Command prefixes like /n, /o, or /* require a real transaction code. "
+            "Use a navigation key such as Back/Cancel or inspect and close popups instead."
+        )
+
+    if normalized in MCP_NON_STARTABLE_TRANSACTIONS:
+        return raw, normalized, (
+            f"{normalized} is a SAP session/screen state, not a startable transaction. "
+            "To return to SAP Easy Access, close the active popup first and use Back/Cancel navigation; "
+            "do not call sap_execute_transaction with SESSION_MANAGER."
+        )
+
+    if not MCP_TRANSACTION_CODE_RE.fullmatch(normalized):
+        return raw, normalized, (
+            f"Invalid SAP transaction code: {raw!r}. Expected forms like MM03, VA03, or /SCWM/MON."
+        )
+
+    return raw, normalized, ""
+
+
+def _blocked_mcp_transaction_result(tool_name, tool_args, raw_tcode, normalized_tcode, error):
+    instruction = (
+        "Do not retry sap_execute_transaction with the same value. "
+        "If the user wants to leave the current transaction or return to SAP Easy Access, "
+        "first handle any active popup, then use sap_send_key with Back or Cancel and re-read the screen."
+    )
+    return {
+        "success": False,
+        "backend": "agent_guard",
+        "action": tool_name,
+        "_tool_args": tool_args,
+        "tcode": raw_tcode,
+        "normalized_tcode": normalized_tcode,
+        "error": error,
+        "result": f"Blocked before MCP call: {error}",
+        "instruction_to_agent": instruction,
+    }
+
 # Study Mode 只允許使用的工具名稱
 STUDY_ALLOWED_TOOLS = {"guide_user_action", "visualize_element"}
 STUDY_TOOL_SCHEMAS = [s for s in TOOL_SCHEMAS if s.get("function", {}).get("name") in STUDY_ALLOWED_TOOLS]
@@ -296,7 +363,7 @@ SYSTEM_PROMPT_AUTO = """你是一個專業的 SAP GUI 操作助手。你可以�
 - 如果 fields 的 type 是 GuiComboBox、dropdown=true 或含 options，代表下拉式選單；必須使用 select_combo，或在彈窗中用 handle_popup 依 label 選值，不要把它當一般文字欄位 set_text
 - 下拉式選單若有 options，優先用 option key；沒有 key 時才用顯示文字
 - 使用 MCP 工具時，如果有 sap_set_fields_and_enter，且同一畫面要填欄位後按 Enter 驗證，優先一次呼叫 sap_set_fields_and_enter(fields={id: value, ...})；不要拆成 sap_set_batch_fields + sap_send_key
-- 需要切換 SAP 交易時，優先使用 sap_execute_transaction(tcode)。不要用 sap_set_field/set_text 直接把裸 T-Code 寫進 OK Code；若必須使用 OK Code 且目前不在起始畫面，交易碼必須加 `/n`，例如 `/nVL10A`。
+- 需要切換 SAP 交易時，sap_execute_transaction(tcode) 只能用真實 T-Code，例如 `MM03`、`VA01`、`/SCWM/MON`、`/n/SCWM/MON`；不可傳入空字串、`/n`、`/o`、`/*` 或 `SESSION_MANAGER`。若使用者要回首頁/SAP Easy Access，不要猜 `/nSESSION_MANAGER`，應先處理活動彈窗，再用 Back/Cancel 導航並重新讀畫面。不要用 sap_set_field/set_text 直接把裸 T-Code 寫進 OK Code；若必須使用 OK Code 且目前不在起始畫面，交易碼必須加 `/n`，例如 `/nVL10A`。
 - 如果只需要填多個欄位但暫不送出，才使用 sap_set_batch_fields(fields={id: value, ...}, validate=false)，不要逐欄 sap_set_field
 - 如果畫面是彈窗 table row 選擇後要按繼續，且有 sap_select_popup_table_row_and_confirm，優先一次呼叫它；不要拆成 sap_select_table_row + sap_handle_popup
 - 不要把 save/post/delete/confirm/release 等敏感提交操作放進批次欄位動作；這些操作仍必須走確認或由使用者明確允許
@@ -1858,6 +1925,16 @@ class SAPAgent:
         ):
             return self._hidden_discovery_tool_result(tool_name)
 
+        if tool_name == "sap_execute_transaction":
+            raw_tcode, normalized_tcode, transaction_error = _validate_mcp_transaction_arg(tool_args)
+            if transaction_error:
+                return _blocked_mcp_transaction_result(
+                    tool_name,
+                    tool_args,
+                    raw_tcode,
+                    normalized_tcode,
+                    transaction_error,
+                )
         if self._mcp_tool_available(tool_name):
             try:
                 result_text = self._call_mcp_tool_text(tool_name, tool_args)
@@ -1872,6 +1949,20 @@ class SAPAgent:
                     "_tool_args": tool_args,
                     "result": result_text,
                 }
+                if (
+                    not success
+                    and tool_name == "sap_execute_transaction"
+                    and (
+                        "Transaction code cannot be empty" in str(result_text)
+                        or "Invalid SAP transaction code" in str(result_text)
+                    )
+                ):
+                    result["error"] = str(result_text)
+                    result["instruction_to_agent"] = (
+                        "Do not retry sap_execute_transaction with the same value. "
+                        "Use only real T-Codes; for returning to SAP Easy Access, "
+                        "handle any active popup first, then use Back/Cancel navigation and re-read the screen."
+                    )
                 if parsed is not None:
                     result["mcp_payload"] = parsed
                     screen = self._extract_screen_from_mcp_payload(parsed)

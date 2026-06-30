@@ -6,6 +6,16 @@
 
 ---
 
+## [0.15.2] - 2026-06-30
+
+#### Changed
+- Codex MCP 設定改為從 `external/mcp-sap-gui` 啟動 `mcp_sap_gui.server`，並在 `.mcp.json` 補上 UTF-8 與 workspace-local `UV_CACHE_DIR`，避免 Codex 直接連 MCP 時從 workspace root 啟動而找不到 `mcp_sap_gui`。
+- MCP 交易政策調整：`SE38` 從預設封鎖清單移除，允許進入 ABAP editor 讀取/編輯情境；`SA38`、`SE80`、`SE16N` 等較高風險交易仍維持封鎖。
+
+#### Fixed
+- 修正 Auto Mode 可能將 `/n`、`/o`、`/*` 或 `/nSESSION_MANAGER` 傳給 `sap_execute_transaction`，導致 MCP 回報空交易碼或 SAP 彈出「無法起始交易 SESSION_MANAGER」的問題；現在會在 agent 端先攔截，並提示改用 popup 處理與 Back/Cancel 導航。
+- 修正 MCP `sap_execute_transaction` 回傳交易碼語意錯誤時，agent 缺少明確下一步指示而可能重試同一錯誤參數的問題。
+
 ## [0.15.1] - 2026-06-24
 
 #### Added

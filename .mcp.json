@@ -4,7 +4,12 @@
       "type": "stdio",
       "command": "uv",
       "args": ["run", "python", "-m", "mcp_sap_gui.server"],
-      "cwd": "${workspaceFolder}"
+      "cwd": "${workspaceFolder}/external/mcp-sap-gui",
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
+        "UV_CACHE_DIR": "${workspaceFolder}/.uv-cache"
+      }
     }
   }
 }
